@@ -1,15 +1,35 @@
 package mr
 
-import "log"
+import (
+	"log"
+	"sync"
+	"time"
+)
 import "net"
 import "os"
 import "net/rpc"
 import "net/http"
 
-
 type Master struct {
 	// Your definitions here.
+	files   []string
+	nReduce int
+	mu      sync.Mutex
 
+	done bool
+}
+
+const (
+	IDLE      = 0
+	RUNNING   = 1
+	COMPLETED = 2
+	ERROR     = 3
+)
+
+type Status struct {
+	status    int
+	machineID int
+	startTime time.Time
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -23,7 +43,6 @@ func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
 	return nil
 }
-
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -46,12 +65,9 @@ func (m *Master) server() {
 // if the entire job has finished.
 //
 func (m *Master) Done() bool {
-	ret := false
-
-	// Your code here.
-
-
-	return ret
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.done
 }
 
 //
@@ -61,9 +77,10 @@ func (m *Master) Done() bool {
 //
 func MakeMaster(files []string, nReduce int) *Master {
 	m := Master{}
+	m.files = files
+	m.nReduce = nReduce
 
 	// Your code here.
-
 
 	m.server()
 	return &m
