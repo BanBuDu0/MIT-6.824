@@ -33,9 +33,9 @@ func (m *Master) Register(args *RegisterArgs, reply *RegisterReply) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.workerNum += 1
-	reply.workId = m.workerNum
-	reply.nReduce = m.nReduce
-	reply.nMap = m.fileNum
+	reply.WorkId = m.workerNum
+	reply.NReduce = m.nReduce
+	reply.NMap = m.fileNum
 	return nil
 }
 
@@ -44,10 +44,10 @@ func (m *Master) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	defer m.mu.Unlock()
 	for _, t := range m.Tasks {
 		if t.TaskStatus == IDLE {
-			t.WorkerId = args.workId
+			t.WorkerId = args.WorkId
 			t.TaskStartTime = time.Now()
 			t.TaskStatus = RUNNING
-			reply.task = &t
+			reply.Task = &t
 			return nil
 		}
 	}
@@ -57,14 +57,14 @@ func (m *Master) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 func (m *Master) UpdateTask(args *UpdateTaskArgs, reply *UpdateTaskReply) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	finish := args.finish
-	task := args.task
+	finish := args.Finish
+	task := args.Task
 	if finish {
 		m.Tasks[task.TaskId].TaskStatus = COMPLETED
 	} else {
 		m.Tasks[task.TaskId].TaskStatus = ERROR
 		log.Fatalf("task: %v \n task phase: %v \n work: %v \n msg: %v",
-			task.TaskId, task.TaskPhase, task.WorkerId, args.msg)
+			task.TaskId, task.TaskPhase, task.WorkerId, args.Msg)
 	}
 	return nil
 }

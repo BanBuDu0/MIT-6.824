@@ -13,23 +13,23 @@ type RegisterArgs struct {
 }
 
 type RegisterReply struct {
-	workId  int
-	nMap    int
-	nReduce int
+	WorkId  int
+	NMap    int
+	NReduce int
 }
 
 type GetTaskArgs struct {
-	workId int
+	WorkId int
 }
 
 type GetTaskReply struct {
-	task *Task
+	Task *Task
 }
 
 type UpdateTaskArgs struct {
-	task   *Task
-	finish bool
-	msg    string
+	Task   *Task
+	Finish bool
+	Msg    string
 }
 type UpdateTaskReply struct {
 }

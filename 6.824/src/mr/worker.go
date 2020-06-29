@@ -51,9 +51,9 @@ func (w *work) registerWork() error {
 	if !e {
 		return errors.New("RPC CALL Master.GetTask ERROR")
 	}
-	w.id = reply.workId
-	w.nReduce = reply.nReduce
-	w.nMap = reply.nMap
+	w.id = reply.WorkId
+	w.nReduce = reply.NReduce
+	w.nMap = reply.NMap
 	return nil
 }
 
@@ -69,14 +69,14 @@ func (w *work) start() {
 
 func (w *work) requestTask() (*Task, error) {
 	args := GetTaskArgs{
-		workId: w.id,
+		WorkId: w.id,
 	}
 	reply := GetTaskReply{}
 	e := call("Master.GetTask", &args, &reply)
 	if !e {
 		return nil, errors.New("RPC CALL Master.GetTask ERROR")
 	}
-	return reply.task, nil
+	return reply.Task, nil
 }
 
 func (w *work) doTask(t *Task) {
@@ -95,9 +95,9 @@ func (w *work) doTask(t *Task) {
 */
 func (w *work) updateTask(t *Task, f bool, m string) error {
 	args := UpdateTaskArgs{
-		task:   t,
-		finish: f,
-		msg:    m,
+		Task:   t,
+		Finish: f,
+		Msg:    m,
 	}
 	reply := GetTaskReply{}
 	e := call("Master.UpdateTask", &args, &reply)
