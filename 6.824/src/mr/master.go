@@ -32,7 +32,7 @@ RPC CALL
 func (m *Master) Register(args *RegisterArgs, reply *RegisterReply) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.workerNum++
+	m.workerNum += 1
 	reply.workId = m.workerNum
 	reply.nReduce = m.nReduce
 	reply.nMap = m.fileNum
