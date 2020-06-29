@@ -25,24 +25,53 @@ type Master struct {
 	done      bool
 }
 
+/**
+RPC CALL
+*/
+
 func (m *Master) Register(args *RegisterArgs, reply *RegisterReply) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.workerNum++
 	reply.workId = m.workerNum
+	reply.nReduce = m.nReduce
+	reply.nMap = m.fileNum
 	return nil
 }
 
-func (m *Master) GetTask(args *GetTaskArgs, reply *GetTaskReply) {
-	task := Task{}
+func (m *Master) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, t := range m.Tasks {
-		if task.TaskStatus == IDLE {
-			task = t
-			break
+		if t.TaskStatus == IDLE {
+			t.WorkerId = args.workId
+			t.TaskStartTime = time.Now()
+			t.TaskStatus = RUNNING
+			reply.task = &t
+			return nil
 		}
 	}
-
+	return nil
 }
+
+func (m *Master) UpdateTask(args *UpdateTaskArgs, reply *UpdateTaskReply) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	finish := args.finish
+	task := args.task
+	if finish {
+		m.Tasks[task.TaskId].TaskStatus = COMPLETED
+	} else {
+		m.Tasks[task.TaskId].TaskStatus = ERROR
+		log.Fatalf("task: %v \n task phase: %v \n work: %v \n msg: %v",
+			task.TaskId, task.TaskPhase, task.WorkerId, args.msg)
+	}
+	return nil
+}
+
+/**
+RPC CALL END
+*/
 
 //
 // start a thread that listens for RPCs from worker.go

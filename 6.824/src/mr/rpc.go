@@ -13,14 +13,25 @@ type RegisterArgs struct {
 }
 
 type RegisterReply struct {
-	workId int
+	workId  int
+	nMap    int
+	nReduce int
 }
 
 type GetTaskArgs struct {
+	workId int
 }
 
 type GetTaskReply struct {
 	task *Task
+}
+
+type UpdateTaskArgs struct {
+	task   *Task
+	finish bool
+	msg    string
+}
+type UpdateTaskReply struct {
 }
 
 // Add your RPC definitions here.

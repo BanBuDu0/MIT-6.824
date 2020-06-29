@@ -22,6 +22,7 @@ const (
 
 type Task struct {
 	TaskId        int
+	WorkerId      int
 	DataSource    string
 	TaskPhase     MyTaskPhase
 	TaskStartTime time.Time
@@ -31,8 +32,10 @@ type Task struct {
 func (t *Task) isTaskAlive() bool {
 	condition1 := t.TaskStartTime.IsZero()
 	condition2 := t.TaskStatus == IDLE
-	condition3 := t.TaskStatus == RUNNING && time.Now().After(t.TaskStartTime.Add(MaxTaskRunTime))
+	condition3 := t.TaskStatus == RUNNING && time.Now().Sub(t.TaskStartTime) > MaxTaskRunTime
 	return condition1 || condition2 || condition3
 }
 
 const MaxTaskRunTime = time.Second * 5
+
+const OutputFile = "mr-out-0"
