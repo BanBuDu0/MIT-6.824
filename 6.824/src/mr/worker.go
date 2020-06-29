@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"sort"
+	"time"
 )
 import "log"
 import "net/rpc"
@@ -59,27 +60,24 @@ func (w *work) registerWork() error {
 
 func (w *work) start() {
 	for {
-		task, e := w.requestTask()
-		if e != nil {
-			panic(e.Error())
+		task := w.requestTask()
+		if &task != nil {
+			w.doTask(task)
 		}
-		w.doTask(task)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-func (w *work) requestTask() (*Task, error) {
+func (w *work) requestTask() Task {
 	args := GetTaskArgs{
 		WorkId: w.id,
 	}
 	reply := GetTaskReply{}
-	e := call("Master.GetTask", &args, &reply)
-	if !e {
-		return nil, errors.New("RPC CALL Master.GetTask ERROR")
-	}
-	return reply.Task, nil
+	call("Master.GetTask", &args, &reply)
+	return *reply.Task
 }
 
-func (w *work) doTask(t *Task) {
+func (w *work) doTask(t Task) {
 	switch t.TaskPhase {
 	case MapPhase:
 		w.doMapTask(t)
@@ -93,9 +91,9 @@ func (w *work) doTask(t *Task) {
 /**
 当running状态的task运行出错或运行结束的时候调用
 */
-func (w *work) updateTask(t *Task, f bool, m string) error {
+func (w *work) updateTask(t Task, f bool, m string) error {
 	args := UpdateTaskArgs{
-		Task:   t,
+		Task:   &t,
 		Finish: f,
 		Msg:    m,
 	}
@@ -107,7 +105,7 @@ func (w *work) updateTask(t *Task, f bool, m string) error {
 	return nil
 }
 
-func (w *work) doMapTask(t *Task) {
+func (w *work) doMapTask(t Task) {
 	file, err := os.Open(t.DataSource)
 	if err != nil {
 		msg := "cannot open " + t.DataSource
@@ -172,7 +170,7 @@ func (w *work) doMapTask(t *Task) {
 	_ = w.updateTask(t, true, "")
 }
 
-func (w *work) doReduceTask(t *Task) {
+func (w *work) doReduceTask(t Task) {
 	var intermediate []KeyValue
 	for i := 0; i < w.nMap; i++ {
 		fileName := fmt.Sprintf("mr-%d-%d", i, t.TaskId)

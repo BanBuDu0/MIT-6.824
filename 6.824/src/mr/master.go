@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -50,6 +51,9 @@ func (m *Master) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 			reply.Task = &t
 			return nil
 		}
+	}
+	for _, t := range m.Tasks {
+		fmt.Print(t)
 	}
 	return nil
 }
@@ -116,8 +120,9 @@ func (m *Master) RegisterMapTask() {
 func (m *Master) RegisterReduceTask() {
 	m.TaskPhase = ReducePhase
 	m.Tasks = make([]Task, m.nReduce)
+	fmt.Println("变成reduce了")
 	//和73同理
-	for i := 0; i < m.fileNum; i += 1 {
+	for i := 0; i < m.nReduce; i += 1 {
 		m.Tasks[i] = Task{
 			TaskId: i,
 			//TODO specify intermediate file
@@ -126,6 +131,10 @@ func (m *Master) RegisterReduceTask() {
 			TaskStatus: IDLE,
 		}
 	}
+	for i := 0; i < m.nReduce; i += 1 {
+		fmt.Println(m.Tasks[i].TaskPhase)
+	}
+
 }
 
 func (m *Master) run() {
