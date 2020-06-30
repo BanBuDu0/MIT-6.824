@@ -61,20 +61,20 @@ func (w *work) registerWork() error {
 func (w *work) start() {
 	for {
 		task := w.requestTask()
-		if &task != nil {
-			w.doTask(task)
+		if task != nil {
+			w.doTask(*task)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-func (w *work) requestTask() Task {
+func (w *work) requestTask() *Task {
 	args := GetTaskArgs{
 		WorkId: w.id,
 	}
 	reply := GetTaskReply{}
 	call("Master.GetTask", &args, &reply)
-	return *reply.Task
+	return reply.Task
 }
 
 func (w *work) doTask(t Task) {
@@ -121,12 +121,11 @@ func (w *work) doMapTask(t Task) {
 	file.Close()
 	kva := w.mapFunc(t.DataSource, string(content))
 
-	pwd, _ := os.Getwd()
 	files := make([]*os.File, w.nReduce)
 	fileNames := make([]string, w.nReduce)
 	for i := 0; i < w.nReduce; i++ {
-		intermediateFileName := fmt.Sprintf("mr-%v-%v-*", t.TaskId, i)
-		intermediateFile, err := ioutil.TempFile(pwd, intermediateFileName)
+		intermediateFileName := fmt.Sprintf("mr-%v-%v", t.TaskId, i)
+		intermediateFile, err := os.Create(intermediateFileName)
 		if err != nil {
 			msg := "Cannot create temp inter file: " + intermediateFileName
 			_ = w.updateTask(t, false, msg)
