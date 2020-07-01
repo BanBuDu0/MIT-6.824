@@ -62,6 +62,11 @@ func (w *work) start() {
 	for {
 		task := w.requestTask()
 		if task != nil {
+			//if task.TaskPhase == MapPhase {
+			//	fmt.Println("phase: Map; " + "task: " + strconv.Itoa(task.TaskId) + "; worker: " + strconv.Itoa(task.WorkerId))
+			//}else{
+			//	fmt.Println("phase: Reduce; " + "task: " + strconv.Itoa(task.TaskId) + "; worker: " + strconv.Itoa(task.WorkerId))
+			//}
 			w.doTask(*task)
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -185,13 +190,16 @@ func (w *work) doReduceTask(t Task) {
 			var kv KeyValue
 			if err := decoder.Decode(&kv); err != nil {
 				break
+			} else {
+
 			}
 			intermediate = append(intermediate, kv)
 		}
 	}
 	sort.Sort(ByKey(intermediate))
+
 	//output
-	outputFileName := fmt.Sprintf("mr-out-%d-*", t.TaskId)
+	outputFileName := fmt.Sprintf("mr-out-%v", t.TaskId)
 	outputFile, err := os.Create(outputFileName)
 	if err != nil {
 		msg := "Cannot create " + outputFileName
