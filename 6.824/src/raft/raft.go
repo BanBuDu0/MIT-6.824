@@ -58,8 +58,9 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
-	mRole     Role                // 当前角色
-	term      int
+
+	mRole Role // 当前角色
+	term  int
 }
 
 // return currentTerm and whether this server
@@ -227,6 +228,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.mRole = FOLLOWER
+	rf.term = 0
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
