@@ -24,8 +24,6 @@ import "../labrpc"
 // import "bytes"
 // import "../labgob"
 
-
-
 //
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -43,6 +41,14 @@ type ApplyMsg struct {
 	CommandIndex int
 }
 
+type Role int
+
+const (
+	FOLLOWER  Role = 0
+	CANDIDATE Role = 1
+	LEADER    Role = 2
+)
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -52,21 +58,14 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
-
-	// Your data here (2A, 2B, 2C).
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
-
+	mRole     Role                // 当前角色
+	term      int
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
-	var term int
-	var isleader bool
-	// Your code here (2A).
-	return term, isleader
+	return rf.term, rf.mRole == LEADER
 }
 
 //
@@ -84,7 +83,6 @@ func (rf *Raft) persist() {
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
 }
-
 
 //
 // restore previously persisted state.
@@ -107,9 +105,6 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.yyy = yyy
 	// }
 }
-
-
-
 
 //
 // example RequestVote RPC arguments structure.
@@ -168,7 +163,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -189,7 +183,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
 
 	return index, term, isLeader
 }
@@ -237,7 +230,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
 
 	return rf
 }
