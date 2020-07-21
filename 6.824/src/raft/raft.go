@@ -188,7 +188,6 @@ func (rf *Raft) callAppendEntries(heartBeat bool) {
 				ok := rf.sendAppendEntries(i, &args, &reply)
 				rf.mu.Lock()
 				if ok {
-
 					_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries success", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
 					if rf.mRole != LEADER {
 						rf.mu.Unlock()
@@ -256,6 +255,7 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) startElection() {
 	rf.mu.Lock()
+	rf.electionTime.Reset(randomizedElectionTimeouts())
 	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: start election", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
 	if rf.mRole == LEADER {
 		_, _ = DPrintf("%d already leader", rf.me)
@@ -291,13 +291,15 @@ func (rf *Raft) startElection() {
 					atomic.AddInt32(&voteNum, 1)
 					_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get vote num %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, atomic.LoadInt32(&voteNum))
 					//如果获得票数超过一半了，就当选leader
-					if atomic.LoadInt32(&voteNum) > rf.halfPeerNum && rf.mRole != LEADER {
+					if atomic.LoadInt32(&voteNum) > rf.halfPeerNum && rf.mRole == CANDIDATE {
 						rf.changeRole(LEADER)
 					}
 				} else {
 					if rf.currentTerm < reply.Term {
 						rf.currentTerm = reply.Term
 						rf.changeRole(FOLLOWER)
+						rf.electionTime.Stop()
+						rf.electionTime.Reset(randomizedElectionTimeouts())
 					}
 				}
 
@@ -320,6 +322,7 @@ func (rf *Raft) changeRole(role Role) {
 		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: change %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, temp, role)
 	case CANDIDATE:
 		rf.votedFor = rf.me
+		rf.electionTime.Stop()
 		rf.electionTime.Reset(randomizedElectionTimeouts())
 		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: change %v to %v, and I will add 1 to my term, now term is %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, temp, role, rf.currentTerm+1)
 		rf.currentTerm += 1

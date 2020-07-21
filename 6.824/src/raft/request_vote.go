@@ -32,6 +32,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term < rf.currentTerm {
 		reply.VoteGranted = false
 		return
+	} else if args.Term > rf.currentTerm {
+		rf.votedFor = args.CandidateId
+		rf.currentTerm = args.Term
+		rf.changeRole(FOLLOWER)
 	}
 
 	condition1 := rf.votedFor == -1 || rf.votedFor == args.CandidateId
