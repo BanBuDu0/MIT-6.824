@@ -75,6 +75,7 @@ type Raft struct {
 	halfPeerNum int32
 
 	//2A
+	stopCh       chan struct{}
 	mRole        Role // 当前角色
 	currentTerm  int
 	votedFor     int // =-1 表示为空
@@ -86,6 +87,8 @@ type Raft struct {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	return rf.currentTerm, rf.mRole == LEADER
 }
 
@@ -168,7 +171,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 //给每个peer发送添加entry的RPC
 func (rf *Raft) callAppendEntries(heartBeat bool) {
-	_, _ = DPrintf("%v: start heartbeat", rf.me)
+	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: start heartbeat", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
 	for index, _ := range rf.peers {
 		if index == rf.me {
 			continue
@@ -183,21 +186,24 @@ func (rf *Raft) callAppendEntries(heartBeat bool) {
 				}
 				reply := AppendEntriesReply{}
 				ok := rf.sendAppendEntries(i, &args, &reply)
+				rf.mu.Lock()
 				if ok {
-					rf.mu.Lock()
+
+					_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries success", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
 					if rf.mRole != LEADER {
 						rf.mu.Unlock()
 						return
 					}
 					if !reply.Success {
+						_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: someone's term is large than me, and i will change term form %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm, reply.Term)
 						rf.currentTerm = reply.Term
 						_, _ = DPrintf("call AppendEntries here change to follow")
 						rf.changeRole(FOLLOWER)
 					}
-					rf.mu.Unlock()
 				} else {
-					_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries error", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
+					_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries error %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
 				}
+				rf.mu.Unlock()
 			}
 		}(index)
 	}
@@ -240,6 +246,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
+	close(rf.stopCh)
 }
 
 func (rf *Raft) killed() bool {
@@ -248,16 +255,17 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) startElection() {
+	rf.mu.Lock()
 	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: start election", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
 	if rf.mRole == LEADER {
 		_, _ = DPrintf("%d already leader", rf.me)
-		rf.mu.Unlock()
 		return
 	}
 
-	if rf.mRole == FOLLOWER {
-		rf.changeRole(CANDIDATE)
-	}
+	//if rf.mRole == FOLLOWER {
+	rf.changeRole(CANDIDATE)
+	//}
+	rf.mu.Unlock()
 
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,
@@ -274,9 +282,10 @@ func (rf *Raft) startElection() {
 		}
 		go func(i int) {
 			var reply RequestVoteReply
+			//_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: sendRequestVote to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
 			s := rf.sendRequestVote(i, &args, &reply)
+			rf.mu.Lock()
 			if s {
-				rf.mu.Lock()
 				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: sendRequestVote to %v, reply: %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i, reply)
 				if reply.VoteGranted && rf.currentTerm >= reply.Term {
 					atomic.AddInt32(&voteNum, 1)
@@ -291,29 +300,34 @@ func (rf *Raft) startElection() {
 						rf.changeRole(FOLLOWER)
 					}
 				}
-				rf.mu.Unlock()
+
+			} else {
+				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: sendRequestVote to %v ERROR", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
 			}
+			rf.mu.Unlock()
 		}(index)
 	}
 }
 
 func (rf *Raft) changeRole(role Role) {
-	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: change %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.mRole, role)
+	temp := rf.mRole
 	rf.mRole = role
 	switch role {
 	case FOLLOWER:
 		rf.appendTime.Stop()
 		rf.electionTime.Reset(randomizedElectionTimeouts())
 		rf.votedFor = -1
+		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: change %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, temp, role)
 	case CANDIDATE:
 		rf.votedFor = rf.me
-		t := randomizedElectionTimeouts()
-		rf.electionTime.Reset(t)
+		rf.electionTime.Reset(randomizedElectionTimeouts())
+		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: change %v to %v, and I will add 1 to my term, now term is %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, temp, role, rf.currentTerm+1)
 		rf.currentTerm += 1
 	case LEADER:
 		rf.votedFor = -1
 		rf.electionTime.Stop()
 		rf.appendTime.Reset(HeartBeatTimeout)
+		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: change %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, temp, role)
 		rf.callAppendEntries(true)
 	}
 }
@@ -342,15 +356,18 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.electionTime = time.NewTimer(randomizedElectionTimeouts())
 	rf.appendTime = time.NewTimer(HeartBeatTimeout)
 	rf.halfPeerNum = (int32)(len(rf.peers) / 2)
+	rf.stopCh = make(chan struct{})
+
+	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: I init my term with %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm)
 
 	//election leader
 	go func() {
 		for {
 			select {
+			case <-rf.stopCh:
+				return
 			case <-rf.electionTime.C:
-				rf.mu.Lock()
 				rf.startElection()
-				rf.mu.Unlock()
 			}
 		}
 	}()
@@ -359,6 +376,8 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	go func() {
 		for {
 			select {
+			case <-rf.stopCh:
+				return
 			case <-rf.appendTime.C:
 				rf.mu.Lock()
 				if rf.mRole == LEADER {
