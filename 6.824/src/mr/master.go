@@ -120,7 +120,6 @@ func (m *Master) RegisterReduceTask() {
 	for i := 0; i < m.nReduce; i += 1 {
 		m.Tasks[i] = Task{
 			TaskId: i,
-			//TODO specify intermediate file
 			//DataSource: m.files[i],
 			TaskPhase:  ReducePhase,
 			TaskStatus: IDLE,
@@ -130,87 +129,89 @@ func (m *Master) RegisterReduceTask() {
 
 func (m *Master) run() {
 	for !m.done {
-		go m.schedule()
-		time.Sleep(100 * time.Millisecond)
-		//	mapAll := true
-		//	//遍历任务，如果发现有空闲的任务就去调度他
-		//	//这里找空闲的任务，因为一个任务如果error了会被置为空闲
-		//	for i := 0; i < len(m.Tasks); i++ {
-		//		if m.Tasks[i].TaskStatus == IDLE || m.Tasks[i].TaskStatus == ERROR {
-		//			mapAll = false
-		//			m.schedule(i)
-		//		}
-		//	}
-		//	if mapAll {
-		//		if m.TaskPhase == MapPhase {
-		//			m.RegisterReduceTask()
-		//		} else if m.TaskPhase == ReducePhase {
-		//			m.done = true
-		//		}
-		//	}
-		//	time.Sleep(100 * time.Millisecond)
-	}
-}
-func (m *Master) schedule() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+		//go m.schedule()
+		//time.Sleep(100 * time.Millisecond)
 
-	if m.done {
-		return
-	}
-	allFinish := true
-	for index, t := range m.Tasks {
-		switch t.TaskStatus {
-		case IDLE:
-			allFinish = false
-		case RUNNING:
-			allFinish = false
-			if time.Now().Sub(t.TaskStartTime) > MaxTaskRunTime {
-				m.Tasks[index].TaskStatus = IDLE
+		mapAll := true
+		//遍历任务，如果发现有空闲的任务就去调度他
+		//这里找空闲的任务，因为一个任务如果error了会被置为空闲
+		for i := 0; i < len(m.Tasks); i++ {
+			if m.Tasks[i].TaskStatus == IDLE || m.Tasks[i].TaskStatus == ERROR {
+				mapAll = false
+				m.schedule(i)
 			}
-		case COMPLETED:
-		case ERROR:
-			allFinish = false
-			m.Tasks[index].TaskStatus = IDLE
-		default:
-			panic("t.status err")
 		}
-	}
-	if allFinish {
-		if m.TaskPhase == MapPhase {
-			m.RegisterReduceTask()
-		} else {
-			m.done = true
+		if mapAll {
+			if m.TaskPhase == MapPhase {
+				m.RegisterReduceTask()
+			} else if m.TaskPhase == ReducePhase {
+				m.done = true
+			}
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-//func (m *Master) schedule(index int) {
+//func (m *Master) schedule() {
 //	m.mu.Lock()
 //	defer m.mu.Unlock()
+//
 //	if m.done {
 //		return
 //	}
-//
-//	task := m.Tasks[index]
-//
-//	switch task.TaskStatus {
-//	case IDLE:
-//		m.done = false
-//	case RUNNING:
-//		m.done = false
-//		if time.Now().Sub(task.TaskStartTime) > MaxTaskRunTime {
+//	allFinish := true
+//	for index, t := range m.Tasks {
+//		switch t.TaskStatus {
+//		case IDLE:
+//			allFinish = false
+//		case RUNNING:
+//			allFinish = false
+//			if time.Now().Sub(t.TaskStartTime) > MaxTaskRunTime {
+//				m.Tasks[index].TaskStatus = IDLE
+//			}
+//		case COMPLETED:
+//		case ERROR:
+//			allFinish = false
 //			m.Tasks[index].TaskStatus = IDLE
+//		default:
+//			panic("t.status err")
 //		}
-//	case COMPLETED:
-//	case ERROR:
-//		m.done = false
-//		m.Tasks[index].TaskStatus = IDLE
-//	default:
-//		panic("t.status err")
 //	}
-//
+//	if allFinish {
+//		if m.TaskPhase == MapPhase {
+//			m.RegisterReduceTask()
+//		} else {
+//			m.done = true
+//		}
+//	}
 //}
+
+func (m *Master) schedule(index int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.done {
+		return
+	}
+
+	task := m.Tasks[index]
+
+	switch task.TaskStatus {
+	case IDLE:
+		m.done = false
+	case RUNNING:
+		m.done = false
+		if time.Now().Sub(task.TaskStartTime) > MaxTaskRunTime {
+			m.Tasks[index].TaskStatus = IDLE
+		}
+	case COMPLETED:
+	case ERROR:
+		m.done = false
+		m.Tasks[index].TaskStatus = IDLE
+	default:
+		panic("t.status err")
+	}
+
+}
 
 //
 // create a Master.
