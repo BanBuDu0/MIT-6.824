@@ -1,10 +1,8 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 import "net"
@@ -130,92 +128,54 @@ func (m *Master) RegisterReduceTask() {
 }
 
 func (m *Master) run() {
-	var voteNum int32
 	for !m.done {
-		go m.schedule(voteNum)
+		//go m.schedule()
+		//time.Sleep(100 * time.Millisecond)
+		mapAll := true
+		//遍历任务，如果发现有空闲的任务就去调度他
+		//这里找空闲的任务，因为一个任务如果error了会被置为空闲
+		for i := 0; i < len(m.Tasks); i++ {
+			if m.Tasks[i].TaskStatus == IDLE || m.Tasks[i].TaskStatus == ERROR || m.Tasks[i].TaskStatus == RUNNING {
+				mapAll = false
+				go m.schedule(i)
+			}
+		}
+		if mapAll {
+			if m.TaskPhase == MapPhase {
+				m.RegisterReduceTask()
+			} else if m.TaskPhase == ReducePhase {
+				m.done = true
+			}
+		}
 		time.Sleep(100 * time.Millisecond)
-		//	mapAll := true
-		//	//遍历任务，如果发现有空闲的任务就去调度他
-		//	//这里找空闲的任务，因为一个任务如果error了会被置为空闲
-		//	for i := 0; i < len(m.Tasks); i++ {
-		//		if m.Tasks[i].TaskStatus == IDLE || m.Tasks[i].TaskStatus == ERROR {
-		//			mapAll = false
-		//			m.schedule(i)
-		//		}
-		//	}
-		//	if mapAll {
-		//		if m.TaskPhase == MapPhase {
-		//			m.RegisterReduceTask()
-		//		} else if m.TaskPhase == ReducePhase {
-		//			m.done = true
-		//		}
-		//	}
-		//	time.Sleep(100 * time.Millisecond)
 	}
 }
-func (m *Master) schedule(test int32) {
+
+func (m *Master) schedule(index int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	atomic.AddInt32(&test, 1)
-	fmt.Print(atomic.LoadInt32(&test))
 	if m.done {
 		return
 	}
-	allFinish := true
-	for index, t := range m.Tasks {
-		switch t.TaskStatus {
-		case IDLE:
-			allFinish = false
-		case RUNNING:
-			allFinish = false
-			if time.Now().Sub(t.TaskStartTime) > MaxTaskRunTime {
-				m.Tasks[index].TaskStatus = IDLE
-			}
-		case COMPLETED:
-		case ERROR:
-			allFinish = false
-			m.Tasks[index].TaskStatus = IDLE
-		default:
-			panic("t.status err")
-		}
-	}
-	if allFinish {
-		if m.TaskPhase == MapPhase {
-			m.RegisterReduceTask()
-		} else {
-			m.done = true
-		}
-	}
-	atomic.AddInt32(&test, -1)
-}
 
-//func (m *Master) schedule(index int) {
-//	m.mu.Lock()
-//	defer m.mu.Unlock()
-//	if m.done {
-//		return
-//	}
-//
-//	task := m.Tasks[index]
-//
-//	switch task.TaskStatus {
-//	case IDLE:
-//		m.done = false
-//	case RUNNING:
-//		m.done = false
-//		if time.Now().Sub(task.TaskStartTime) > MaxTaskRunTime {
-//			m.Tasks[index].TaskStatus = IDLE
-//		}
-//	case COMPLETED:
-//	case ERROR:
-//		m.done = false
-//		m.Tasks[index].TaskStatus = IDLE
-//	default:
-//		panic("t.status err")
-//	}
-//
-//}
+	task := m.Tasks[index]
+
+	switch task.TaskStatus {
+	case IDLE:
+		m.done = false
+	case RUNNING:
+		m.done = false
+		if time.Now().Sub(task.TaskStartTime) > MaxTaskRunTime {
+			m.Tasks[index].TaskStatus = IDLE
+		}
+	case ERROR:
+		m.done = false
+		m.Tasks[index].TaskStatus = IDLE
+	default:
+		panic("t.status err")
+	}
+
+}
 
 //
 // create a Master.
