@@ -46,7 +46,10 @@ type ApplyMsg struct {
 }
 
 type Role int
-type Entry string
+type Entry struct {
+	Commend interface{}
+	Term    int
+}
 
 const (
 	FOLLOWER  Role = 0
@@ -81,7 +84,13 @@ type Raft struct {
 	votedFor     int // =-1 表示为空
 	electionTime *time.Timer
 	appendTime   *time.Timer
-	logs         []Entry // 暂定string
+
+	//2B
+	logEntries  []Entry
+	commitIndex int
+	lastApplied int
+	nextIndex   []int
+	matchIndex  []int
 }
 
 // return currentTerm and whether this server
@@ -228,6 +237,20 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
+	term, isLeader = rf.GetState()
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if isLeader {
+		index = len(rf.logEntries)
+		rf.logEntries = append(rf.logEntries, Entry{
+			Term:    term,
+			Commend: command,
+		})
+		rf.nextIndex[rf.me] = index + 1
+		rf.matchIndex[rf.me] = index
+		rf.callAppendEntries(false)
+	}
+
 	return index, term, isLeader
 }
 
@@ -262,9 +285,7 @@ func (rf *Raft) startElection() {
 		return
 	}
 
-	//if rf.mRole == FOLLOWER {
 	rf.changeRole(CANDIDATE)
-	//}
 	rf.mu.Unlock()
 
 	args := RequestVoteArgs{

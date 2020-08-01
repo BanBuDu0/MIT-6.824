@@ -144,6 +144,7 @@ func (w *work) doMapTask(t Task) {
 	}
 
 	//保持中间结果
+	// 使用key的hash来要将当前这个k-v结果保存在哪个中间文件上
 	for _, kv := range kva {
 		reduceIndex := ihash(kv.Key) % w.nReduce
 		interFile := files[reduceIndex]
@@ -177,6 +178,9 @@ func (w *work) doMapTask(t Task) {
 func (w *work) doReduceTask(t Task) {
 	var intermediate []KeyValue
 	for i := 0; i < w.nMap; i++ {
+		// mr-%d-%d, 第一个%d指示的是哪个task生成的，因为nMap = fileNum，一个file开一个map task
+		// 第二个%d指示的是由哪个reduce task去处理该文件
+		// 这样就把不同map产生的中间结果分给不同的reduce做了
 		fileName := fmt.Sprintf("mr-%d-%d", i, t.TaskId)
 		file, err := os.Open(fileName)
 		if err != nil {

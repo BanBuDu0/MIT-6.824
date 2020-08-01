@@ -28,7 +28,6 @@ type Master struct {
 /**
 RPC CALL
 */
-
 func (m *Master) Register(args *RegisterArgs, reply *RegisterReply) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
