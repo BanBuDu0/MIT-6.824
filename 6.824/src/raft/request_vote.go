@@ -10,6 +10,7 @@ type RequestVoteArgs struct {
 	CandidateId  int
 	LastLogIndex int
 	LastLogTerm  int
+	// term更新的，index更新的
 }
 
 //
@@ -37,10 +38,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.Term
 		rf.changeRole(FOLLOWER)
 	}
-
+	//condition1 votedFor is null or candidateId
 	condition1 := rf.votedFor == -1 || rf.votedFor == args.CandidateId
-	// TODO condition2
-	condition2 := true
+	//condition2 candidate's log is up-to-date
+	condition2 := args.Term >= rf.currentTerm && args.LastLogIndex >= rf.commitIndex
 	if condition1 && condition2 {
 		rf.votedFor = args.CandidateId
 		reply.Term = args.Term

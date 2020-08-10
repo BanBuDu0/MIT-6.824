@@ -241,13 +241,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if isLeader {
-		index = len(rf.logEntries)
 		rf.logEntries = append(rf.logEntries, Entry{
 			Term:    term,
 			Commend: command,
 		})
-		rf.nextIndex[rf.me] = index + 1
-		rf.matchIndex[rf.me] = index
+		index = len(rf.logEntries)
+		rf.nextIndex[rf.me] = index
+		rf.matchIndex[rf.me] = index - 1
 		rf.callAppendEntries(false)
 	}
 
@@ -381,6 +381,8 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.appendTime = time.NewTimer(HeartBeatTimeout)
 	rf.halfPeerNum = (int32)(len(rf.peers) / 2)
 	rf.stopCh = make(chan struct{})
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
 
 	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: I init my term with %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm)
 

@@ -128,6 +128,7 @@ func (w *work) doMapTask(t Task) {
 
 	files := make([]*os.File, w.nReduce)
 	fileNames := make([]string, w.nReduce)
+	// 如果worker失败的话，master会把该task重置为空闲，由于这种创建文件的方式，重新执行task的时候会覆盖文件
 	for i := 0; i < w.nReduce; i++ {
 		intermediateFileName := fmt.Sprintf("mr-%v-%v", t.TaskId, i)
 		intermediateFile, err := os.Create(intermediateFileName)
@@ -145,6 +146,11 @@ func (w *work) doMapTask(t Task) {
 
 	//保持中间结果
 	// 使用key的hash来要将当前这个k-v结果保存在哪个中间文件上
+	// 这里的Hash是很重要的一个东西，在论文里称为Partitioning Function
+	// 根据key做hash的话就可以保证，相同key的中间值都在同一个partition中。
+	// 这里的话，比如 A的map结果，就都会保存在 mr-taskID-partitionID中
+	// 因为都是用 A去做hash，所以所有A的中间结果的partitionID都是相同的，
+	// 这样后面做reduce的时候就，一个reduce task就能处理完某一个key，而不会由遗漏
 	for _, kv := range kva {
 		reduceIndex := ihash(kv.Key) % w.nReduce
 		interFile := files[reduceIndex]
