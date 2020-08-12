@@ -89,8 +89,9 @@ type Raft struct {
 	logEntries  []Entry
 	commitIndex int
 	lastApplied int
-	nextIndex   []int
-	matchIndex  []int
+	// only leader
+	nextIndex  []int
+	matchIndex []int
 }
 
 // return currentTerm and whether this server
@@ -189,9 +190,8 @@ func (rf *Raft) callAppendEntries(heartBeat bool) {
 			if heartBeat {
 				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: send heartbeat to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
 				args := AppendEntriesArgs{
-					Term:        rf.currentTerm,
-					LeaderID:    rf.me,
-					IsHeartBeat: heartBeat,
+					Term:     rf.currentTerm,
+					LeaderID: rf.me,
 				}
 				reply := AppendEntriesReply{}
 				ok := rf.sendAppendEntries(i, &args, &reply)
@@ -212,6 +212,8 @@ func (rf *Raft) callAppendEntries(heartBeat bool) {
 					_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries error %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
 				}
 				rf.mu.Unlock()
+			} else {
+
 			}
 		}(index)
 	}

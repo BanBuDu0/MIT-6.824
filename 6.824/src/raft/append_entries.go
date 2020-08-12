@@ -7,7 +7,6 @@ type AppendEntriesArgs struct {
 	PrevLogTerm  int
 	Entries      []Entry
 	LeaderCommit int
-	IsHeartBeat  bool
 }
 
 type AppendEntriesReply struct {
@@ -26,14 +25,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	if args.IsHeartBeat {
-		reply.Term = args.Term
-		reply.Success = true
-		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get heartbeat from %v, I will change to follower", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID)
-		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get heartbeat from %v, I will change to follower, and i will change term form %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID, rf.currentTerm, args.Term)
-		rf.currentTerm = args.Term
-		rf.changeRole(FOLLOWER)
-	} else {
+	reply.Term = args.Term
+	reply.Success = true
+	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get heartbeat from %v, I will change to follower", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID)
+	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get heartbeat from %v, I will change to follower, and i will change term form %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID, rf.currentTerm, args.Term)
+	rf.currentTerm = args.Term
+	rf.changeRole(FOLLOWER)
 
-	}
 }
