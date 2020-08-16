@@ -261,15 +261,15 @@ func (rf *Raft) applyMsg() {
 func (rf *Raft) getAppendArgs(peerIndex int) *AppendEntriesArgs {
 	prevLogIndex := rf.nextIndex[peerIndex] - 1
 	// 这里如果是刚开始的话，所有的NextIndex = 1, 所以prevLogIndex = 0
-	logs := rf.logEntries[rf.nextIndex[peerIndex]:]
-	term := rf.logEntries[prevLogIndex].Term
+	_, _ = DPrintf("id: %d, role: %v, term: %v, prevLogIndex: %v, rf.logs: %+v",
+		rf.me, rf.mRole, prevLogIndex, rf.currentTerm, rf.logEntries)
 	args := AppendEntriesArgs{
 		Term:         rf.currentTerm,
 		LeaderID:     rf.me,
 		PrevLogIndex: prevLogIndex,
-		PrevLogTerm:  term,
+		PrevLogTerm:  rf.logEntries[prevLogIndex].Term,
 		LeaderCommit: rf.commitIndex,
-		Entries:      logs,
+		Entries:      rf.logEntries[rf.nextIndex[peerIndex]:],
 	}
 	_, _ = DPrintf("id: %d, role: %v, term: %v: get Append Args: %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args)
 	return &args
