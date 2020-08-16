@@ -71,4 +71,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.applyMsg()
 	}
 
+	reply.Success = true
+	reply.Term = rf.currentTerm
+
 }

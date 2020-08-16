@@ -189,12 +189,24 @@ func (rf *Raft) callAppendEntries() {
 		}
 		go func(i int) {
 			_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: send heartbeat to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
-			args := rf.getAppendArgs(i)
+			prevLogIndex := rf.nextIndex[i] - 1
+			_, _ = DPrintf("id: %d, role: %v, prevLogIndex: %v, currentTerm: %v, rf.logs: %+v",
+				rf.me, rf.mRole, prevLogIndex, rf.currentTerm, rf.logEntries)
+			args := AppendEntriesArgs{
+				Term:         rf.currentTerm,
+				LeaderID:     rf.me,
+				PrevLogIndex: prevLogIndex,
+				PrevLogTerm:  rf.logEntries[prevLogIndex].Term,
+				LeaderCommit: rf.commitIndex,
+				Entries:      rf.logEntries[rf.nextIndex[i]:],
+			}
+			_, _ = DPrintf("id: %d, role: %v, term: %v: get Append Args: %+v", rf.me, rf.mRole, rf.currentTerm, args)
+
 			reply := AppendEntriesReply{}
-			ok := rf.sendAppendEntries(i, args, &reply)
+			ok := rf.sendAppendEntries(i, &args, &reply)
 			rf.mu.Lock()
 			if ok {
-				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries success", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
+				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries success, reply: %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, reply)
 				if rf.mRole != LEADER {
 					rf.mu.Unlock()
 					return
@@ -256,23 +268,6 @@ func (rf *Raft) applyMsg() {
 			rf.mu.Unlock()
 		}
 	}
-}
-
-func (rf *Raft) getAppendArgs(peerIndex int) *AppendEntriesArgs {
-	prevLogIndex := rf.nextIndex[peerIndex] - 1
-	// 这里如果是刚开始的话，所有的NextIndex = 1, 所以prevLogIndex = 0
-	_, _ = DPrintf("id: %d, role: %v, term: %v, prevLogIndex: %v, rf.logs: %+v",
-		rf.me, rf.mRole, prevLogIndex, rf.currentTerm, rf.logEntries)
-	args := AppendEntriesArgs{
-		Term:         rf.currentTerm,
-		LeaderID:     rf.me,
-		PrevLogIndex: prevLogIndex,
-		PrevLogTerm:  rf.logEntries[prevLogIndex].Term,
-		LeaderCommit: rf.commitIndex,
-		Entries:      rf.logEntries[rf.nextIndex[peerIndex]:],
-	}
-	_, _ = DPrintf("id: %d, role: %v, term: %v: get Append Args: %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args)
-	return &args
 }
 
 //
@@ -449,7 +444,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	// 因为nextIndex初始化为1，所以创建一个空的log占位置
 	rf.logEntries = make([]Entry, 1)
 
-	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: I init my term with %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm)
+	_, _ = DPrintf("raft init : %+v", rf)
 
 	//election leader
 	go func() {
