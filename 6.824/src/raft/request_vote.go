@@ -10,7 +10,6 @@ type RequestVoteArgs struct {
 	CandidateId  int
 	LastLogIndex int
 	LastLogTerm  int
-	// term更新的，index更新的
 }
 
 //
@@ -34,17 +33,24 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = false
 		return
 	} else if args.Term > rf.currentTerm {
-		rf.votedFor = args.CandidateId
 		rf.currentTerm = args.Term
 		rf.changeRole(FOLLOWER)
 	}
 	//condition1 votedFor is null or candidateId
 	condition1 := rf.votedFor == -1 || rf.votedFor == args.CandidateId
 	//condition2 candidate's log is up-to-date
-	condition2 := args.Term >= rf.currentTerm && args.LastLogIndex >= rf.commitIndex
+	//If the logs have last entries with different terms, then the log with the later term is more up-to-date.
+	//If the logs end with the same term, then whichever log is longer is more up-to-date.
+	lastLogIndex := len(rf.logEntries) - 1
+	condition2 := args.LastLogTerm >= rf.logEntries[lastLogIndex].Term ||
+		(args.LastLogTerm == rf.logEntries[lastLogIndex].Term && lastLogIndex >= args.LastLogIndex)
 	if condition1 && condition2 {
 		rf.votedFor = args.CandidateId
 		reply.Term = args.Term
 		reply.VoteGranted = true
+		rf.electionTime.Reset(randomizedElectionTimeouts())
+	} else {
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
 	}
 }

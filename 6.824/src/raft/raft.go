@@ -90,8 +90,9 @@ type Raft struct {
 	commitIndex int
 	lastApplied int
 	// only leader
-	nextIndex  []int
-	matchIndex []int
+	nextIndex  []int // 当前最后一个log的index+1
+	matchIndex []int //复制到其他server的log entry的index
+	applyCh    chan ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -180,43 +181,97 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 //给每个peer发送添加entry的RPC
-func (rf *Raft) callAppendEntries(heartBeat bool) {
+func (rf *Raft) callAppendEntries() {
 	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: start heartbeat", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
 	for index, _ := range rf.peers {
 		if index == rf.me {
 			continue
 		}
 		go func(i int) {
-			if heartBeat {
-				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: send heartbeat to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
-				args := AppendEntriesArgs{
-					Term:     rf.currentTerm,
-					LeaderID: rf.me,
+			_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: send heartbeat to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
+			args := rf.getAppendArgs(i)
+			reply := AppendEntriesReply{}
+			ok := rf.sendAppendEntries(i, args, &reply)
+			rf.mu.Lock()
+			if ok {
+				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries success", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
+				if rf.mRole != LEADER {
+					rf.mu.Unlock()
+					return
 				}
-				reply := AppendEntriesReply{}
-				ok := rf.sendAppendEntries(i, &args, &reply)
-				rf.mu.Lock()
-				if ok {
-					_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries success", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
-					if rf.mRole != LEADER {
-						rf.mu.Unlock()
-						return
-					}
-					if !reply.Success {
+
+				if !reply.Success {
+					if reply.Term > rf.currentTerm {
 						_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: someone's term is large than me, and i will change term form %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm, reply.Term)
 						rf.currentTerm = reply.Term
 						_, _ = DPrintf("call AppendEntries here change to follow")
 						rf.changeRole(FOLLOWER)
+					} else {
+						// 如果append失败的话就往前减少nextIndex继续append
+						// TODO 返回不匹配的index，减少相应的index
+						rf.nextIndex[i] -= 1
 					}
 				} else {
-					_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries error %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
+					//base on students-guide-to-raft
+					rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
+					rf.nextIndex[i] = rf.matchIndex[i] + 1
+					for i := len(rf.logEntries) - 1; i > rf.commitIndex; i++ {
+						matched := 0
+						for _, matchIndex := range rf.matchIndex {
+							if matchIndex >= i {
+								matched++
+							}
+							// log复制到了一半以上的peer
+							if matchIndex > len(rf.peers)/2 {
+								rf.commitIndex = matchIndex
+								rf.applyMsg()
+								break
+							}
+						}
+					}
 				}
-				rf.mu.Unlock()
 			} else {
-
+				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries error %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
 			}
+			rf.mu.Unlock()
 		}(index)
 	}
+}
+
+func (rf *Raft) applyMsg() {
+	// apply to state machine
+	if rf.commitIndex > rf.lastApplied {
+		logs := rf.logEntries[rf.lastApplied+1 : rf.commitIndex+1]
+		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v, lastApplied: %v, commitIndex: %v: Apply Msg %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.lastApplied, rf.commitIndex, logs)
+		startIndex := rf.lastApplied + 1
+		for index, log := range logs {
+			applyArgs := ApplyMsg{
+				Command:      log,
+				CommandValid: true,
+				CommandIndex: startIndex + index,
+			}
+			rf.applyCh <- applyArgs
+			rf.mu.Lock()
+			rf.lastApplied++
+			rf.mu.Unlock()
+		}
+	}
+}
+
+func (rf *Raft) getAppendArgs(peerIndex int) *AppendEntriesArgs {
+	prevLogIndex := rf.nextIndex[peerIndex] - 1
+	// 这里如果是刚开始的话，所有的NextIndex = 1, 所以prevLogIndex = 0
+	logs := rf.logEntries[prevLogIndex:]
+	term := rf.logEntries[prevLogIndex].Term
+	args := AppendEntriesArgs{
+		Term:         rf.currentTerm,
+		LeaderID:     rf.me,
+		PrevLogIndex: prevLogIndex,
+		PrevLogTerm:  term,
+		LeaderCommit: rf.commitIndex,
+		Entries:      logs,
+	}
+	return &args
 }
 
 //
@@ -250,7 +305,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		index = len(rf.logEntries)
 		rf.nextIndex[rf.me] = index
 		rf.matchIndex[rf.me] = index - 1
-		rf.callAppendEntries(false)
+		rf.callAppendEntries()
 	}
 
 	return index, term, isLeader
@@ -354,7 +409,7 @@ func (rf *Raft) changeRole(role Role) {
 		rf.electionTime.Stop()
 		rf.appendTime.Reset(HeartBeatTimeout)
 		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: change %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, temp, role)
-		rf.callAppendEntries(true)
+		rf.callAppendEntries()
 	}
 }
 
@@ -384,7 +439,14 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.halfPeerNum = (int32)(len(rf.peers) / 2)
 	rf.stopCh = make(chan struct{})
 	rf.nextIndex = make([]int, len(rf.peers))
+	//第一次添加log就从1开始添加
+	//这样的话初始commitIndex = matchIndex = 0
+	for i := range rf.nextIndex {
+		rf.nextIndex[i] = 1
+	}
 	rf.matchIndex = make([]int, len(rf.peers))
+	// 因为nextIndex初始化为1，所以创建一个空的log占位置
+	rf.logEntries = make([]Entry, 1)
 
 	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: I init my term with %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm)
 
@@ -409,7 +471,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 			case <-rf.appendTime.C:
 				rf.mu.Lock()
 				if rf.mRole == LEADER {
-					rf.callAppendEntries(true)
+					rf.callAppendEntries()
 					rf.appendTime.Reset(HeartBeatTimeout)
 				}
 				rf.mu.Unlock()
