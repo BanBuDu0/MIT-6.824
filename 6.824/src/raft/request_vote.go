@@ -43,7 +43,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	//If the logs end with the same term, then whichever log is longer is more up-to-date.
 	lastLogIndex := len(rf.logEntries) - 1
 	condition2 := args.LastLogTerm >= rf.logEntries[lastLogIndex].Term ||
-		(args.LastLogTerm == rf.logEntries[lastLogIndex].Term && lastLogIndex >= args.LastLogIndex)
+		(args.LastLogTerm == rf.logEntries[lastLogIndex].Term && args.LastLogIndex >= lastLogIndex)
 	if condition1 && condition2 {
 		rf.votedFor = args.CandidateId
 		reply.Term = args.Term

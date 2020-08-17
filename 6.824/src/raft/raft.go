@@ -59,7 +59,7 @@ const (
 
 const (
 	ElectionTimeout  = time.Millisecond * 300 // 选举超时时间基础
-	HeartBeatTimeout = time.Millisecond * 150 // 心跳包间隔
+	HeartBeatTimeout = time.Millisecond * 120 // 心跳包间隔
 )
 
 func randomizedElectionTimeouts() time.Duration {
@@ -182,16 +182,15 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 //给每个peer发送添加entry的RPC
 func (rf *Raft) callAppendEntries() {
-	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: start heartbeat", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
+	_, _ = DPrintf("start callAppendEntries, raft: %+v", rf)
 	for index, _ := range rf.peers {
 		if index == rf.me {
 			continue
 		}
 		go func(i int) {
-			_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: send heartbeat to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
 			prevLogIndex := rf.nextIndex[i] - 1
-			_, _ = DPrintf("id: %d, role: %v, prevLogIndex: %v, currentTerm: %v, rf.logs: %+v",
-				rf.me, rf.mRole, prevLogIndex, rf.currentTerm, rf.logEntries)
+			_, _ = DPrintf("%v send AppendEntries RPC to %v， prevLogIndex: %v", rf.me, i, prevLogIndex)
+
 			args := AppendEntriesArgs{
 				Term:         rf.currentTerm,
 				LeaderID:     rf.me,
@@ -200,42 +199,45 @@ func (rf *Raft) callAppendEntries() {
 				LeaderCommit: rf.commitIndex,
 				Entries:      rf.logEntries[rf.nextIndex[i]:],
 			}
-			_, _ = DPrintf("id: %d, role: %v, term: %v: get Append Args: %+v", rf.me, rf.mRole, rf.currentTerm, args)
+			_, _ = DPrintf("AppendEntriesArgs to peer %v: %+v", i, args)
 
 			reply := AppendEntriesReply{}
 			ok := rf.sendAppendEntries(i, &args, &reply)
 			rf.mu.Lock()
 			if ok {
-				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries success, reply: %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, reply)
+				_, _ = DPrintf("id: %d, peer: %v, role: %v, term: %v: call append entries success, reply: %+v", rf.me, i, rf.mRole, rf.currentTerm, reply)
 				if rf.mRole != LEADER {
 					rf.mu.Unlock()
 					return
 				}
 
 				if !reply.Success {
+					_, _ = DPrintf("AppendEntries Reply from peer: %v false: %+v", i, reply)
 					if reply.Term > rf.currentTerm {
 						_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: someone's term is large than me, and i will change term form %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm, reply.Term)
 						rf.currentTerm = reply.Term
-						_, _ = DPrintf("call AppendEntries here change to follow")
 						rf.changeRole(FOLLOWER)
 					} else {
 						// 如果append失败的话就往前减少nextIndex继续append
 						// TODO 返回不匹配的index，减少相应的index
 						rf.nextIndex[i] -= 1
+						_, _ = DPrintf("peer: %v not match, -1 nextIndex, nextIndex: %v", i, rf.nextIndex[i])
 					}
 				} else {
+					_, _ = DPrintf("peer: %v, AppendEntries Reply true: %+v", i, reply)
+
 					//base on students-guide-to-raft
 					rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
 					rf.nextIndex[i] = rf.matchIndex[i] + 1
-					for i := len(rf.logEntries) - 1; i > rf.commitIndex; i++ {
+					for j := len(rf.logEntries) - 1; j > rf.commitIndex; j-- {
 						matched := 0
 						for _, matchIndex := range rf.matchIndex {
-							if matchIndex >= i {
+							if matchIndex >= j {
 								matched++
 							}
 							// log复制到了一半以上的peer
-							if matchIndex > len(rf.peers)/2 {
-								rf.commitIndex = matchIndex
+							if matched > len(rf.peers)/2 {
+								rf.commitIndex = j
 								rf.applyMsg()
 								break
 							}
@@ -252,22 +254,25 @@ func (rf *Raft) callAppendEntries() {
 
 func (rf *Raft) applyMsg() {
 	// apply to state machine
-	if rf.commitIndex > rf.lastApplied {
-		logs := rf.logEntries[rf.lastApplied+1 : rf.commitIndex+1]
-		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v, lastApplied: %v, commitIndex: %v: Apply Msg %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.lastApplied, rf.commitIndex, logs)
-		startIndex := rf.lastApplied + 1
-		for index, log := range logs {
-			applyArgs := ApplyMsg{
-				Command:      log,
-				CommandValid: true,
-				CommandIndex: startIndex + index,
+	go func() {
+		if rf.commitIndex > rf.lastApplied {
+			logs := rf.logEntries[rf.lastApplied+1 : rf.commitIndex+1]
+			startIndex := rf.lastApplied + 1
+			for index, log := range logs {
+				applyArgs := ApplyMsg{
+					Command:      log.Commend,
+					CommandValid: true,
+					CommandIndex: startIndex + index,
+				}
+
+				rf.applyCh <- applyArgs
+				rf.mu.Lock()
+				rf.lastApplied++
+				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v, lastApplied: %v, commitIndex: %v: Apply Msg %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.lastApplied, rf.commitIndex, applyArgs)
+				rf.mu.Unlock()
 			}
-			rf.applyCh <- applyArgs
-			rf.mu.Lock()
-			rf.lastApplied++
-			rf.mu.Unlock()
 		}
-	}
+	}()
 }
 
 //
@@ -294,14 +299,15 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if isLeader {
+		DPrintf("Start a command %+v", command)
 		rf.logEntries = append(rf.logEntries, Entry{
 			Term:    term,
 			Commend: command,
 		})
-		index = len(rf.logEntries)
+		index = len(rf.logEntries) - 1
 		rf.nextIndex[rf.me] = index
 		rf.matchIndex[rf.me] = index - 1
-		rf.callAppendEntries()
+		//rf.callAppendEntries()
 	}
 
 	return index, term, isLeader
@@ -331,8 +337,9 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) startElection() {
 	rf.mu.Lock()
-	rf.electionTime.Reset(randomizedElectionTimeouts())
 	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: start election", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
+
+	rf.electionTime.Reset(randomizedElectionTimeouts())
 	if rf.mRole == LEADER {
 		_, _ = DPrintf("%d already leader", rf.me)
 		return
@@ -344,8 +351,8 @@ func (rf *Raft) startElection() {
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,
 		CandidateId:  rf.me,
-		LastLogIndex: 0,
-		LastLogTerm:  0,
+		LastLogIndex: len(rf.logEntries) - 1,
+		LastLogTerm:  rf.logEntries[len(rf.logEntries)-1].Term,
 	}
 
 	var voteNum int32
@@ -356,24 +363,20 @@ func (rf *Raft) startElection() {
 		}
 		go func(i int) {
 			var reply RequestVoteReply
-			//_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: sendRequestVote to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
 			s := rf.sendRequestVote(i, &args, &reply)
 			rf.mu.Lock()
 			if s {
-				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: sendRequestVote to %v, reply: %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i, reply)
 				if reply.VoteGranted && rf.currentTerm >= reply.Term {
 					atomic.AddInt32(&voteNum, 1)
-					_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get vote num %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, atomic.LoadInt32(&voteNum))
 					//如果获得票数超过一半了，就当选leader
 					if atomic.LoadInt32(&voteNum) > rf.halfPeerNum && rf.mRole == CANDIDATE {
+						_, _ = DPrintf("id: %v become leader, raft: %+v", rf.me, rf)
 						rf.changeRole(LEADER)
 					}
 				} else {
 					if rf.currentTerm < reply.Term {
 						rf.currentTerm = reply.Term
 						rf.changeRole(FOLLOWER)
-						rf.electionTime.Stop()
-						rf.electionTime.Reset(randomizedElectionTimeouts())
 					}
 				}
 
@@ -386,25 +389,28 @@ func (rf *Raft) startElection() {
 }
 
 func (rf *Raft) changeRole(role Role) {
-	temp := rf.mRole
 	rf.mRole = role
 	switch role {
 	case FOLLOWER:
 		rf.appendTime.Stop()
 		rf.electionTime.Reset(randomizedElectionTimeouts())
 		rf.votedFor = -1
-		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: change %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, temp, role)
 	case CANDIDATE:
 		rf.votedFor = rf.me
-		rf.electionTime.Stop()
 		rf.electionTime.Reset(randomizedElectionTimeouts())
-		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: change %v to %v, and I will add 1 to my term, now term is %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, temp, role, rf.currentTerm+1)
 		rf.currentTerm += 1
 	case LEADER:
-		rf.votedFor = -1
+		//rf.votedFor = -1
+		for index, _ := range rf.nextIndex {
+			rf.nextIndex[index] = len(rf.logEntries)
+		}
+
+		for index, _ := range rf.matchIndex {
+			rf.matchIndex[index] = 0
+		}
+
 		rf.electionTime.Stop()
 		rf.appendTime.Reset(HeartBeatTimeout)
-		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: change %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, temp, role)
 		rf.callAppendEntries()
 	}
 }
@@ -443,6 +449,7 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.matchIndex = make([]int, len(rf.peers))
 	// 因为nextIndex初始化为1，所以创建一个空的log占位置
 	rf.logEntries = make([]Entry, 1)
+	rf.applyCh = applyCh
 
 	_, _ = DPrintf("raft init : %+v", rf)
 
