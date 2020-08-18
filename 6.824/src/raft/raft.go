@@ -305,8 +305,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Commend: command,
 		})
 		index = len(rf.logEntries) - 1
-		rf.nextIndex[rf.me] = index
-		rf.matchIndex[rf.me] = index - 1
+		rf.nextIndex[rf.me] = index + 1
+		rf.matchIndex[rf.me] = index
 		//rf.callAppendEntries()
 	}
 
@@ -363,6 +363,7 @@ func (rf *Raft) startElection() {
 		}
 		go func(i int) {
 			var reply RequestVoteReply
+			_, _ = DPrintf("id: %v send request vote to %v, args: %+v", rf.me, i, args)
 			s := rf.sendRequestVote(i, &args, &reply)
 			rf.mu.Lock()
 			if s {

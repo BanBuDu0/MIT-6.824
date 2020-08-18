@@ -42,9 +42,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	//If the logs have last entries with different terms, then the log with the later term is more up-to-date.
 	//If the logs end with the same term, then whichever log is longer is more up-to-date.
 	lastLogIndex := len(rf.logEntries) - 1
-	condition2 := args.LastLogTerm >= rf.logEntries[lastLogIndex].Term ||
-		(args.LastLogTerm == rf.logEntries[lastLogIndex].Term && args.LastLogIndex >= lastLogIndex)
-	if condition1 && condition2 {
+	//condition2 := args.LastLogTerm >= rf.logEntries[lastLogIndex].Term ||
+	//	(args.LastLogTerm == rf.logEntries[lastLogIndex].Term && args.LastLogIndex >= lastLogIndex)
+	_, _ = DPrintf("id: %v get request vote args, my term: %v, my lastLogIndex: %v, my lastLogTerm: %v", rf.me, rf.currentTerm, lastLogIndex, rf.logEntries[lastLogIndex].Term)
+	// condition2 = true: requester is not up-to-date.
+	condition2 := args.LastLogTerm < rf.logEntries[lastLogIndex].Term ||
+		(args.LastLogTerm == rf.logEntries[lastLogIndex].Term && args.LastLogIndex < lastLogIndex)
+
+	if condition1 && !condition2 {
 		rf.votedFor = args.CandidateId
 		reply.Term = args.Term
 		reply.VoteGranted = true
