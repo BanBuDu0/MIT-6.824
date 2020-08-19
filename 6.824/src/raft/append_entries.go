@@ -12,8 +12,10 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int
-	Success bool
+	Term          int
+	Success       bool
+	ConflictIndex int
+	ConflictTerm  int
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -25,6 +27,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//args.Entries = 6 7 8
 
 	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get heartbeat from %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID)
+	reply.ConflictIndex = -1
+	reply.ConflictTerm = -1
 
 	// 1. Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
@@ -49,19 +53,45 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// mismatch
 	// len(rf.logEntries)-1 < args.PrevLogIndex 表示如果我的最后一个Log都不是prevLogIndex, 即leader的prevLogIndex超出了我的最大logIndex
 	// rf.logEntries[args.PrevLogIndex].Term != args.PrevLogTerm 表示在prevLogIndex这个位置我和leader的log的term不一致
-	if len(rf.logEntries)-1 < args.PrevLogIndex || rf.logEntries[args.PrevLogIndex].Term != args.PrevLogTerm {
-		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get AppendEntries from %v, but rely on #2, I will reject him", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID)
+	//if len(rf.logEntries)-1 < args.PrevLogIndex || rf.logEntries[args.PrevLogIndex].Term != args.PrevLogTerm {
+	//	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get AppendEntries from %v, but rely on #2, I will reject him", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID)
+	//	reply.Success = false
+	//	reply.Term = rf.currentTerm
+	//	return
+	//}
+
+	// 如果在log里面找不到prevLogIndex
+	if len(rf.logEntries)-1 < args.PrevLogIndex {
 		reply.Success = false
 		reply.Term = rf.currentTerm
+		reply.ConflictIndex = len(rf.logEntries)
 		return
+	}
+
+	// 如果log里面有prevLogIndex，但是Term不匹配
+	conflictTerm := -1
+	if rf.logEntries[args.PrevLogIndex].Term != args.PrevLogTerm {
+		conflictTerm = rf.logEntries[args.PrevLogIndex].Term
+	}
+	if conflictTerm != -1 {
+		for i := args.PrevLogIndex; i >= 0; i-- {
+			if rf.logEntries[i].Term != conflictTerm || i == 0 {
+				reply.Success = false
+				reply.Term = rf.currentTerm
+				reply.ConflictIndex = i + 1
+				reply.ConflictTerm = conflictTerm
+				return
+			}
+		}
 	}
 
 	// 3.If an existing entry conflicts with a new one (same index but different terms),
 	// delete the existing entry and all that follow it
 	// 找传过来的Logs和我本地有没有不同，找到不同的index
+	// 这里找的是prevLogIndex之后的log和传过来的
 	conflictIndex := -1
 	for index, entry := range args.Entries {
-		if len(rf.logEntries) < args.PrevLogIndex+2+index ||
+		if len(rf.logEntries)-1 < args.PrevLogIndex+1+index ||
 			rf.logEntries[args.PrevLogIndex+1+index].Term != entry.Term {
 			conflictIndex = index
 			break
