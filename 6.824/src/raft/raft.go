@@ -219,7 +219,7 @@ func (rf *Raft) callAppendEntries() {
 						rf.changeRole(FOLLOWER)
 					} else {
 						// 如果append失败的话就往前减少nextIndex继续append
-						// TODO 返回不匹配的index，减少相应的index
+						// based on students-guide-to-raft accelerated log backtracking optimization
 						rf.nextIndex[i] -= 1
 						_, _ = DPrintf("peer: %v not match, -1 nextIndex, nextIndex: %v", i, rf.nextIndex[i])
 						if reply.ConflictIndex != -1 {
@@ -230,9 +230,7 @@ func (rf *Raft) callAppendEntries() {
 									break
 								}
 							}
-
 						}
-
 					}
 				} else {
 					_, _ = DPrintf("peer: %v, AppendEntries Reply true: %+v", i, reply)
