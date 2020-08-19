@@ -222,6 +222,17 @@ func (rf *Raft) callAppendEntries() {
 						// TODO 返回不匹配的index，减少相应的index
 						rf.nextIndex[i] -= 1
 						_, _ = DPrintf("peer: %v not match, -1 nextIndex, nextIndex: %v", i, rf.nextIndex[i])
+						if reply.ConflictIndex != -1 {
+							rf.nextIndex[i] = reply.ConflictIndex
+							for j := len(rf.logEntries) - 1; j >= 0; j-- {
+								if rf.logEntries[j].Term == reply.ConflictTerm {
+									rf.nextIndex[i] = j + 1
+									break
+								}
+							}
+
+						}
+
 					}
 				} else {
 					_, _ = DPrintf("peer: %v, AppendEntries Reply true: %+v", i, reply)
