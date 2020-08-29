@@ -25,8 +25,8 @@ import (
 import "sync/atomic"
 import "../labrpc"
 
-// import "bytes"
-// import "../labgob"
+import "bytes"
+import "../labgob"
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -80,13 +80,13 @@ type Raft struct {
 	//2A
 	stopCh       chan struct{}
 	mRole        Role // 当前角色
-	currentTerm  int
-	votedFor     int // =-1 表示为空
+	currentTerm  int  // Persistent state
+	votedFor     int  // =-1 表示为空 Persistent state
 	electionTime *time.Timer
 	appendTime   *time.Timer
 
 	//2B
-	logEntries  []Entry
+	logEntries  []Entry // Persistent state
 	commitIndex int
 	lastApplied int
 	// only leader
@@ -117,6 +117,22 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	err := e.Encode(rf.currentTerm)
+	if err != nil {
+		_, _ = DPrintf("encode currentTerm error")
+	}
+	err = e.Encode(rf.votedFor)
+	if err != nil {
+		_, _ = DPrintf("encode voteFor error")
+	}
+	err = e.Encode(rf.logEntries)
+	if err != nil {
+		_, _ = DPrintf("encode logEntries error")
+	}
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -139,6 +155,22 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	var currentTerm int
+	var voteFor int
+	var logEntries []Entry
+	if d.Decode(&currentTerm) != nil || d.Decode(&voteFor) != nil ||
+		d.Decode(&logEntries) != nil {
+		_, _ = DPrintf("readPersist error")
+	} else {
+		rf.mu.Lock()
+		rf.logEntries = logEntries
+		rf.votedFor = voteFor
+		rf.currentTerm = currentTerm
+		rf.mu.Unlock()
+	}
 }
 
 //
@@ -183,7 +215,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 //给每个peer发送添加entry的RPC
 func (rf *Raft) callAppendEntries() {
 	_, _ = DPrintf("start callAppendEntries, raft: %+v", rf)
-	for index, _ := range rf.peers {
+	for index := range rf.peers {
 		if index == rf.me {
 			continue
 		}
@@ -203,6 +235,8 @@ func (rf *Raft) callAppendEntries() {
 
 			reply := AppendEntriesReply{}
 			ok := rf.sendAppendEntries(i, &args, &reply)
+			// 这里为什么又可以加锁呢，因为这是在go func里面，外面的锁不会进入到go func里面来，
+			// 又因为上面的RPC肯定比本地函数退栈更耗时间，所以这里再锁的时候前面changeRole函数外面的锁早就已经解开了
 			rf.mu.Lock()
 			if ok {
 				_, _ = DPrintf("id: %d, peer: %v, role: %v, term: %v: call append entries success, reply: %+v", rf.me, i, rf.mRole, rf.currentTerm, reply)
@@ -263,6 +297,7 @@ func (rf *Raft) callAppendEntries() {
 
 func (rf *Raft) applyMsg() {
 	// apply to state machine
+	// 因为这里使用的是go func，所以盖面lastApplied的时候需要重新加锁
 	go func() {
 		if rf.commitIndex > rf.lastApplied {
 			logs := rf.logEntries[rf.lastApplied+1 : rf.commitIndex+1]
@@ -308,7 +343,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if isLeader {
-		DPrintf("Start a command %+v", command)
+		_, _ = DPrintf("Start a command %+v", command)
 		rf.logEntries = append(rf.logEntries, Entry{
 			Term:    term,
 			Commend: command,
@@ -316,7 +351,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		index = len(rf.logEntries) - 1
 		rf.nextIndex[rf.me] = index + 1
 		rf.matchIndex[rf.me] = index
-		//rf.callAppendEntries()
+		rf.persist()
 	}
 
 	return index, term, isLeader
@@ -405,23 +440,24 @@ func (rf *Raft) changeRole(role Role) {
 		rf.appendTime.Stop()
 		rf.electionTime.Reset(randomizedElectionTimeouts())
 		rf.votedFor = -1
+		rf.persist()
 	case CANDIDATE:
 		rf.votedFor = rf.me
 		rf.electionTime.Reset(randomizedElectionTimeouts())
 		rf.currentTerm += 1
+		rf.persist()
 	case LEADER:
-		//rf.votedFor = -1
-		for index, _ := range rf.nextIndex {
+		for index := range rf.nextIndex {
 			rf.nextIndex[index] = len(rf.logEntries)
 		}
 
-		for index, _ := range rf.matchIndex {
+		for index := range rf.matchIndex {
 			rf.matchIndex[index] = 0
 		}
 
 		rf.electionTime.Stop()
 		rf.appendTime.Reset(HeartBeatTimeout)
-		rf.callAppendEntries()
+		//rf.callAppendEntries()
 	}
 }
 
@@ -482,12 +518,13 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 			case <-rf.stopCh:
 				return
 			case <-rf.appendTime.C:
-				rf.mu.Lock()
 				if rf.mRole == LEADER {
-					rf.callAppendEntries()
+					rf.mu.Lock()
 					rf.appendTime.Reset(HeartBeatTimeout)
+					rf.mu.Unlock()
+					rf.callAppendEntries()
 				}
-				rf.mu.Unlock()
+
 			}
 		}
 

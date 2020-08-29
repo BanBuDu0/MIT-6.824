@@ -101,6 +101,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get AppendEntries from %v, rely on #3, I find a conflict index, i will delete the existing entry and all that follow it", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID)
 		rf.logEntries = rf.logEntries[:args.PrevLogIndex+1+conflictIndex]
 		rf.logEntries = append(rf.logEntries, args.Entries[conflictIndex:]...)
+		rf.persist()
 	}
 
 	// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)

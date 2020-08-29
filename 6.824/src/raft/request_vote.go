@@ -54,6 +54,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Term = args.Term
 		reply.VoteGranted = true
 		rf.electionTime.Reset(randomizedElectionTimeouts())
+		rf.persist()
 	} else {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
