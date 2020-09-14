@@ -55,19 +55,12 @@ func (ck *Clerk) Get(key string) string {
 		}
 		reply := &GetReply{}
 		ok := server.Call("KVServer.Get", args, reply)
-		if ok == false {
+		if ok == false || reply.Err == ErrWrongLeader {
 			serverId = int(nrand()) % len(ck.servers)
-			continue
-		}
-		if reply.IsLeader == false {
-			serverId = reply.LeaderId
-			ck.leader = reply.LeaderId
 			continue
 		}
 		return reply.Value
 	}
-
-	// You will have to modify this function.
 }
 
 //
@@ -95,13 +88,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		}
 		reply := &PutAppendReply{}
 		ok := server.Call("KVServer.PutAppend", args, reply)
-		if ok == false {
+		if ok == false || reply.Err == ErrWrongLeader {
 			serverId = int(nrand()) % len(ck.servers)
-			continue
-		}
-		if reply.IsLeader == false {
-			serverId = reply.LeaderId
-			ck.leader = reply.LeaderId
 			continue
 		}
 		//	TODO PutAppend 成功
@@ -111,8 +99,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, "Put")
+	ck.PutAppend(key, value, PutOp)
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, "Append")
+	ck.PutAppend(key, value, AppendOp)
 }

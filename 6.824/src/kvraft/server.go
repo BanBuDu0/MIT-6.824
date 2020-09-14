@@ -7,9 +7,10 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-const Debug = 0
+const Debug = 1
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -22,7 +23,12 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	op string
+	Type      string // 操作的类型
+	ClientId  int64
+	SerialNum int32
+	// 操作的 key value
+	Key   string
+	Value string
 }
 
 type KVServer struct {
@@ -35,15 +41,81 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+
+	//Your server keeps track of the latest sequence number it has seen for each client,
+	//and simply ignores any operation that it has already seen.
+	clientLastSeq map[int64]int32   //记录每个client的最后一个sequence num
+	db            map[string]string //记录key-value数据对
+	agreeChs      map[int]chan Op
+	stopCh        chan struct{}
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+	//按照论文里所说，即使是get也不能直接从 leader server里面取，需要和其他server通信一轮，确保自己真的是最新的数据
 	// Your code here.
+	op := Op{
+		Type:      GetOp,
+		ClientId:  args.ClientId,
+		SerialNum: args.SerialNum,
+		Key:       args.Key,
+	}
+
+	isLeader := kv.waitOp(op)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	kv.mu.Lock()
+	value, ok := kv.db[op.Key]
+	kv.mu.Unlock()
+
+	if !ok {
+		reply.Err = ErrNoKey
+		return
+	}
+	reply.Value = value
+	//这里是没发生错误的正确返回
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	op := Op{
+		Type:      args.Op,
+		ClientId:  args.ClientId,
+		SerialNum: args.SerialNum,
+		Key:       args.Key,
+		Value:     args.Value,
+	}
 
+	isLeader := kv.waitOp(op)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+	}
+}
+
+func (kv *KVServer) waitOp(op Op) bool {
+	index, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		return false
+	}
+	agreeCh, ok := kv.agreeChs[index]
+	if !ok {
+		agreeCh = make(chan Op, 1)
+		kv.mu.Lock()
+		kv.agreeChs[index] = agreeCh
+		kv.mu.Unlock()
+	}
+
+	select {
+	case agreeOp := <-agreeCh:
+		if !(op.ClientId == agreeOp.ClientId && op.SerialNum == agreeOp.SerialNum) {
+			return false
+		}
+	case <-time.After(Timeout):
+		return false
+	}
+	return true
 }
 
 //
@@ -60,6 +132,7 @@ func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
+	close(kv.stopCh)
 }
 
 func (kv *KVServer) killed() bool {
@@ -67,6 +140,9 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
+// 整个 KV-server 跟 raft 模块交互的只有两个地方
+// 1. raft.Start(command interface{}), 传入的是需要执行的命令，返回的是该命令在 raft 中的 index, 该命令所处的Term，和该raft server是否leader
+// 2. raft commit 日志之后，向applyCh写入信息，包括Start传入的命令，commit是否成功和 command在 raft中的index
 //
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
@@ -96,6 +172,40 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	kv.clientLastSeq = make(map[int64]int32)
+	kv.db = make(map[string]string)
+	kv.stopCh = make(chan struct{})
+	kv.agreeChs = make(map[int]chan Op)
+
+	go func() {
+		for {
+			select {
+			case <-kv.stopCh:
+				return
+			case msg := <-kv.applyCh:
+				if msg.CommandValid {
+					op := msg.Command.(Op)
+					kv.mu.Lock()
+					maxIndex, ok := kv.clientLastSeq[op.ClientId]
+					if !ok || op.SerialNum > maxIndex {
+						kv.clientLastSeq[op.ClientId] = op.SerialNum
+						switch op.Type {
+						case PutOp:
+							kv.db[op.Key] = op.Value
+						case AppendOp:
+							kv.db[op.Key] += op.Value
+						}
+					}
+					kv.mu.Unlock()
+					agreeCh, ok := kv.agreeChs[msg.CommandIndex]
+					if ok {
+						//DPrintf("apply go routine can't get agreeCh on %v, try to create one", msg.CommandIndex)
+						agreeCh <- op
+					}
+				}
+			}
+		}
+	}()
 
 	return kv
 }

@@ -1,12 +1,22 @@
 package kvraft
 
+import "time"
+
 const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
 )
 
+const Timeout = 500 * time.Millisecond
+
 type Err string
+
+const (
+	PutOp    = "Put"
+	AppendOp = "Append"
+	GetOp    = "Get"
+)
 
 // Put or Append
 type PutAppendArgs struct {
@@ -21,9 +31,7 @@ type PutAppendArgs struct {
 }
 
 type PutAppendReply struct {
-	Err      Err
-	IsLeader bool
-	LeaderId int
+	Err Err
 }
 
 type GetArgs struct {
@@ -34,8 +42,6 @@ type GetArgs struct {
 }
 
 type GetReply struct {
-	Err      Err
-	IsLeader bool
-	Value    string
-	LeaderId int
+	Err   Err
+	Value string
 }
