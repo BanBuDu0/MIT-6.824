@@ -44,7 +44,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
-	serverId := int(nrand()) % len(ck.servers)
+	serverId := ck.leader
 	curSerialNum := atomic.AddInt32(&ck.serialNum, 1)
 	for {
 		server := ck.servers[serverId]
@@ -82,10 +82,10 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	serverId := nrand()
+	serverId := ck.leader
 	curSerialNum := atomic.AddInt32(&ck.serialNum, 1)
 	for {
-		server := ck.servers[serverId%int64(len(ck.servers))]
+		server := ck.servers[serverId]
 		args := &PutAppendArgs{
 			Key:       key,
 			Value:     value,
@@ -96,11 +96,11 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		reply := &PutAppendReply{}
 		ok := server.Call("KVServer.PutAppend", args, reply)
 		if ok == false {
-			serverId = nrand()
+			serverId = int(nrand()) % len(ck.servers)
 			continue
 		}
 		if reply.IsLeader == false {
-			serverId = int64(reply.LeaderId)
+			serverId = reply.LeaderId
 			ck.leader = reply.LeaderId
 			continue
 		}
