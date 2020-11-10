@@ -51,7 +51,7 @@ type KVServer struct {
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	//按照论文里所说，即使是get也不能直接从 leader server里面取，需要和其他server通信一轮，确保自己真的是最新的数据
+	//按照论文里所说，即使是get也不能直接从 leader server里面取，需要和其他server通信一轮，确保自己真的是最新的leader
 	// Your code here.
 	op := Op{
 		Type:      GetOp,

@@ -93,6 +93,12 @@ type Raft struct {
 	nextIndex  []int // 当前最后一个log的index+1
 	matchIndex []int //复制到其他server的log entry的index
 	applyCh    chan ApplyMsg
+
+	//3B
+	//the index of the last entry in the log that the snapshot replaces (the last entry the state machine had applied)
+	LastIncludedIndex int
+	//the term of last entry
+	LastIncludedTerm int
 }
 
 // return currentTerm and whether this server
@@ -297,7 +303,7 @@ func (rf *Raft) callAppendEntries() {
 
 func (rf *Raft) applyMsg() {
 	// apply to state machine
-	// 因为这里使用的是go func，所以盖面lastApplied的时候需要重新加锁
+	// 因为这里使用的是go func，所以改变lastApplied的时候需要重新加锁
 	go func() {
 		if rf.commitIndex > rf.lastApplied {
 			logs := rf.logEntries[rf.lastApplied+1 : rf.commitIndex+1]
@@ -457,7 +463,7 @@ func (rf *Raft) changeRole(role Role) {
 
 		rf.electionTime.Stop()
 		rf.appendTime.Reset(HeartBeatTimeout)
-		//rf.callAppendEntries()
+		rf.callAppendEntries()
 	}
 }
 
