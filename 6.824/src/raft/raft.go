@@ -226,6 +226,7 @@ func (rf *Raft) callAppendEntries() {
 			continue
 		}
 		go func(i int) {
+			rf.mu.Lock()
 			prevLogIndex := rf.nextIndex[i] - 1
 			_, _ = DPrintf("%v send AppendEntries RPC to %v， prevLogIndex: %v", rf.me, i, prevLogIndex)
 
@@ -238,6 +239,7 @@ func (rf *Raft) callAppendEntries() {
 				Entries:      rf.logEntries[rf.nextIndex[i]:],
 			}
 			_, _ = DPrintf("AppendEntriesArgs to peer %v: %+v", i, args)
+			rf.mu.Unlock()
 
 			reply := AppendEntriesReply{}
 			ok := rf.sendAppendEntries(i, &args, &reply)
@@ -305,6 +307,7 @@ func (rf *Raft) applyMsg() {
 	// apply to state machine
 	// 因为这里使用的是go func，所以改变lastApplied的时候需要重新加锁
 	go func() {
+		rf.mu.Lock()
 		if rf.commitIndex > rf.lastApplied {
 			logs := rf.logEntries[rf.lastApplied+1 : rf.commitIndex+1]
 			startIndex := rf.lastApplied + 1
@@ -316,12 +319,11 @@ func (rf *Raft) applyMsg() {
 				}
 
 				rf.applyCh <- applyArgs
-				rf.mu.Lock()
 				rf.lastApplied++
 				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v, lastApplied: %v, commitIndex: %v: Apply Msg %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.lastApplied, rf.commitIndex, applyArgs)
-				rf.mu.Unlock()
 			}
 		}
+		rf.mu.Unlock()
 	}()
 }
 
@@ -463,7 +465,7 @@ func (rf *Raft) changeRole(role Role) {
 
 		rf.electionTime.Stop()
 		rf.appendTime.Reset(HeartBeatTimeout)
-		rf.callAppendEntries()
+		go rf.callAppendEntries()
 	}
 }
 
@@ -524,12 +526,12 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 			case <-rf.stopCh:
 				return
 			case <-rf.appendTime.C:
+				rf.mu.Lock()
 				if rf.mRole == LEADER {
-					rf.mu.Lock()
 					rf.appendTime.Reset(HeartBeatTimeout)
-					rf.mu.Unlock()
-					rf.callAppendEntries()
+					go rf.callAppendEntries()
 				}
+				rf.mu.Unlock()
 
 			}
 		}

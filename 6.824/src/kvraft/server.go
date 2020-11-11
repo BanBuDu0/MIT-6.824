@@ -99,13 +99,13 @@ func (kv *KVServer) waitOp(op Op) bool {
 	if !isLeader {
 		return false
 	}
+	kv.mu.Lock()
 	agreeCh, ok := kv.agreeChs[index]
 	if !ok {
 		agreeCh = make(chan Op, 1)
-		kv.mu.Lock()
 		kv.agreeChs[index] = agreeCh
-		kv.mu.Unlock()
 	}
+	kv.mu.Unlock()
 
 	select {
 	case agreeOp := <-agreeCh:
@@ -196,8 +196,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 							kv.db[op.Key] += op.Value
 						}
 					}
-					kv.mu.Unlock()
 					agreeCh, ok := kv.agreeChs[msg.CommandIndex]
+					kv.mu.Unlock()
 					if ok {
 						//DPrintf("apply go routine can't get agreeCh on %v, try to create one", msg.CommandIndex)
 						agreeCh <- op
