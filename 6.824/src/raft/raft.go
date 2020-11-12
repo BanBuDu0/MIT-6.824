@@ -115,6 +115,10 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
+	rf.persister.SaveRaftState(rf.genPersistData())
+}
+
+func (rf *Raft) genPersistData() []byte {
 	// Your code here (2C).
 	// Example:
 	// w := new(bytes.Buffer)
@@ -127,18 +131,18 @@ func (rf *Raft) persist() {
 	e := labgob.NewEncoder(w)
 	err := e.Encode(rf.currentTerm)
 	if err != nil {
-		_, _ = DPrintf("encode currentTerm error")
+		_, _ = DPrintf("encode rf.currentTerm error")
 	}
 	err = e.Encode(rf.votedFor)
 	if err != nil {
-		_, _ = DPrintf("encode voteFor error")
+		_, _ = DPrintf("encode rf.voteFor error")
 	}
 	err = e.Encode(rf.logEntries)
 	if err != nil {
-		_, _ = DPrintf("encode logEntries error")
+		_, _ = DPrintf("encode rf.logEntries error")
 	}
 	data := w.Bytes()
-	rf.persister.SaveRaftState(data)
+	return data
 }
 
 //
@@ -177,6 +181,11 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.currentTerm = currentTerm
 		rf.mu.Unlock()
 	}
+}
+
+func (rf *Raft) DoSnapshot(serverData []byte) {
+
+	rf.persister.SaveStateAndSnapshot(, serverData)
 }
 
 //

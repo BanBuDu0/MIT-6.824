@@ -4,6 +4,7 @@ import (
 	"../labgob"
 	"../labrpc"
 	"../raft"
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -48,6 +49,9 @@ type KVServer struct {
 	db            map[string]string //记录key-value数据对
 	agreeChs      map[int]chan Op
 	stopCh        chan struct{}
+
+	//3B
+	persister *raft.Persister
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -118,6 +122,63 @@ func (kv *KVServer) waitOp(op Op) bool {
 	return true
 }
 
+func (kv *KVServer) waitApply() {
+	for {
+		select {
+		case <-kv.stopCh:
+			return
+		case msg := <-kv.applyCh:
+			if msg.CommandValid {
+				op := msg.Command.(Op)
+				kv.mu.Lock()
+				maxIndex, ok := kv.clientLastSeq[op.ClientId]
+				if !ok || op.SerialNum > maxIndex {
+					kv.clientLastSeq[op.ClientId] = op.SerialNum
+					switch op.Type {
+					case PutOp:
+						kv.db[op.Key] = op.Value
+					case AppendOp:
+						kv.db[op.Key] += op.Value
+					case GetOp:
+
+					default:
+						_, _ = DPrintf("ERROR OP type")
+					}
+				}
+				kv.doSnapshot()
+				agreeCh, ok := kv.agreeChs[msg.CommandIndex]
+				if ok {
+					agreeCh <- op
+				}
+				kv.mu.Unlock()
+			}
+		}
+	}
+}
+
+func (kv *KVServer) doSnapshot() {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	err := e.Encode(kv.db)
+	if err != nil {
+		_, _ = DPrintf("encode kv.db error")
+	}
+	kv.rf.DoSnapshot(w.Bytes())
+}
+
+// read之前需要先搞明白snapshot里面有什么
+func (kv *KVServer) readSnapshot() {
+	if kv.maxraftstate < 0 || kv.persister.RaftStateSize() < kv.maxraftstate {
+		return
+	}
+	r := bytes.NewBuffer(kv.persister.ReadSnapshot())
+	d := labgob.NewDecoder(r)
+
+	if d.Decode(&kv.db) != nil {
+		_, _ = DPrintf("kv server: %v, readSnapshot error", kv.me)
+	}
+}
+
 //
 // the tester calls Kill() when a KVServer instance won't
 // be needed again. for your convenience, we supply
@@ -165,11 +226,12 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
+	kv.persister = persister
 
 	// You may need initialization code here.
 
 	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.rf = raft.Make(servers, me, kv.persister, kv.applyCh)
 
 	// You may need initialization code here.
 	kv.clientLastSeq = make(map[int64]int32)
@@ -177,35 +239,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.stopCh = make(chan struct{})
 	kv.agreeChs = make(map[int]chan Op)
 
-	go func() {
-		for {
-			select {
-			case <-kv.stopCh:
-				return
-			case msg := <-kv.applyCh:
-				if msg.CommandValid {
-					op := msg.Command.(Op)
-					kv.mu.Lock()
-					maxIndex, ok := kv.clientLastSeq[op.ClientId]
-					if !ok || op.SerialNum > maxIndex {
-						kv.clientLastSeq[op.ClientId] = op.SerialNum
-						switch op.Type {
-						case PutOp:
-							kv.db[op.Key] = op.Value
-						case AppendOp:
-							kv.db[op.Key] += op.Value
-						}
-					}
-					agreeCh, ok := kv.agreeChs[msg.CommandIndex]
-					kv.mu.Unlock()
-					if ok {
-						//DPrintf("apply go routine can't get agreeCh on %v, try to create one", msg.CommandIndex)
-						agreeCh <- op
-					}
-				}
-			}
-		}
-	}()
+	kv.readSnapshot()
 
+	go kv.waitApply()
 	return kv
 }
