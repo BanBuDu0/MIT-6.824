@@ -33,7 +33,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
-	} else if args.Term > rf.currentTerm {
+	}
+
+	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
 		rf.changeRole(FOLLOWER)
 	}
@@ -48,7 +50,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	_, _ = DPrintf("id: %v get request vote args, my term: %v, my lastLogIndex: %v, my lastLogTerm: %v", rf.me, rf.currentTerm, lastLogIndex, rf.logEntries[lastLogIndex].Term)
 	// condition2 = true: requester is not up-to-date.
 	condition2 := args.LastLogTerm < rf.logEntries[lastLogIndex].Term ||
-		(args.LastLogTerm == rf.logEntries[lastLogIndex].Term && args.LastLogIndex < lastLogIndex)
+		(args.LastLogTerm == rf.logEntries[lastLogIndex].Term && args.LastLogIndex < rf.getAbsoluteIndex(lastLogIndex))
 
 	if condition1 && !condition2 {
 		rf.votedFor = args.CandidateId

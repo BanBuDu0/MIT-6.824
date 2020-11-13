@@ -145,7 +145,7 @@ func (kv *KVServer) waitApply() {
 						_, _ = DPrintf("ERROR OP type")
 					}
 				}
-				kv.doSnapshot()
+				kv.doSnapshot(msg.CommandIndex)
 				agreeCh, ok := kv.agreeChs[msg.CommandIndex]
 				if ok {
 					agreeCh <- op
@@ -156,22 +156,26 @@ func (kv *KVServer) waitApply() {
 	}
 }
 
-func (kv *KVServer) doSnapshot() {
+func (kv *KVServer) doSnapshot(lastApplyIndex int) {
+	if kv.maxraftstate < 0 || kv.persister.RaftStateSize() < kv.maxraftstate {
+		return
+	}
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	err := e.Encode(kv.db)
 	if err != nil {
 		_, _ = DPrintf("encode kv.db error")
 	}
-	kv.rf.DoSnapshot(w.Bytes())
+	kv.rf.DoSnapshot(lastApplyIndex, w.Bytes())
 }
 
 // read之前需要先搞明白snapshot里面有什么
 func (kv *KVServer) readSnapshot() {
-	if kv.maxraftstate < 0 || kv.persister.RaftStateSize() < kv.maxraftstate {
+	snapshot := kv.persister.ReadSnapshot()
+	if snapshot == nil || len(snapshot) <= 0 {
 		return
 	}
-	r := bytes.NewBuffer(kv.persister.ReadSnapshot())
+	r := bytes.NewBuffer(snapshot)
 	d := labgob.NewDecoder(r)
 
 	if d.Decode(&kv.db) != nil {
@@ -227,6 +231,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.me = me
 	kv.maxraftstate = maxraftstate
 	kv.persister = persister
+	DPrintf("maxraftstate: %d", maxraftstate)
 
 	// You may need initialization code here.
 
@@ -238,7 +243,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.db = make(map[string]string)
 	kv.stopCh = make(chan struct{})
 	kv.agreeChs = make(map[int]chan Op)
-
 	kv.readSnapshot()
 
 	go kv.waitApply()

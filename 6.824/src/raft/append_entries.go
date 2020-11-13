@@ -61,21 +61,21 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//}
 
 	// 如果在log里面找不到prevLogIndex
-	if len(rf.logEntries)-1 < args.PrevLogIndex {
+	if rf.getAbsoluteIndex(len(rf.logEntries)-1) < args.PrevLogIndex {
 		reply.Success = false
 		reply.Term = rf.currentTerm
-		reply.ConflictIndex = len(rf.logEntries)
+		reply.ConflictIndex = rf.getAbsoluteIndex(len(rf.logEntries))
 		return
 	}
 
 	// 如果log里面有prevLogIndex，但是Term不匹配
 	conflictTerm := -1
-	if rf.logEntries[args.PrevLogIndex].Term != args.PrevLogTerm {
-		conflictTerm = rf.logEntries[args.PrevLogIndex].Term
+	if rf.logEntries[rf.getRelativeIndex(args.PrevLogIndex)].Term != args.PrevLogTerm {
+		conflictTerm = rf.logEntries[rf.getRelativeIndex(args.PrevLogIndex)].Term
 	}
 	if conflictTerm != -1 {
 		for i := args.PrevLogIndex; i >= 0; i-- {
-			if rf.logEntries[i].Term != conflictTerm || i == 0 {
+			if rf.logEntries[rf.getRelativeIndex(i)].Term != conflictTerm || i == 0 {
 				reply.Success = false
 				reply.Term = rf.currentTerm
 				reply.ConflictIndex = i + 1
@@ -91,28 +91,27 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 这里找的是prevLogIndex之后的log和传过来的
 	conflictIndex := -1
 	for index, entry := range args.Entries {
-		if len(rf.logEntries)-1 < args.PrevLogIndex+1+index ||
-			rf.logEntries[args.PrevLogIndex+1+index].Term != entry.Term {
+		if rf.getAbsoluteIndex(len(rf.logEntries)-1) < args.PrevLogIndex+1+index ||
+			rf.logEntries[rf.getRelativeIndex(args.PrevLogIndex+1+index)].Term != entry.Term {
 			conflictIndex = index
 			break
 		}
 	}
 	if conflictIndex != -1 {
 		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get AppendEntries from %v, rely on #3, I find a conflict index, i will delete the existing entry and all that follow it", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID)
-		rf.logEntries = rf.logEntries[:args.PrevLogIndex+1+conflictIndex]
+		rf.logEntries = rf.logEntries[:rf.getRelativeIndex(args.PrevLogIndex+1+conflictIndex)]
 		rf.logEntries = append(rf.logEntries, args.Entries[conflictIndex:]...)
 		rf.persist()
 	}
 
+	reply.Success = true
+	reply.Term = rf.currentTerm
+	_, _ = DPrintf("peer: %v, reply true, and now he is: %+v", rf.me, rf)
 	// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	if args.LeaderCommit > rf.commitIndex {
 		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get AppendEntries from %v, rely on #5, I will set my commitIndex = %v, and apply the msg to my state machine", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID, int(math.Min(float64(args.LeaderCommit), float64(len(rf.logEntries)-1))))
-		lastNewEntry := len(rf.logEntries) - 1
+		lastNewEntry := rf.getAbsoluteIndex(len(rf.logEntries) - 1)
 		rf.commitIndex = int(math.Min(float64(args.LeaderCommit), float64(lastNewEntry)))
 		rf.applyMsg()
 	}
-
-	reply.Success = true
-	reply.Term = rf.currentTerm
-	DPrintf("peer: %v, reply true, and now he is: %+v", rf.me, rf)
 }

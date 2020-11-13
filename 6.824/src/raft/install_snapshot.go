@@ -6,9 +6,7 @@ type InstallSnapshotArgs struct {
 	LeaderId          int
 	LastIncludedIndex int
 	LastIncludedTerm  int
-	Offset            int
-	State             []byte
-	Done              bool
+	Snapshot          []byte
 }
 
 type InstallSnapshotReply struct {
@@ -19,9 +17,25 @@ type InstallSnapshotReply struct {
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	// 1.Reply immediately if term < currentTerm
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
 	}
+
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.changeRole(FOLLOWER)
+	}
+
+	// 6.If existing log entry has same index and term as snapshot’s last included entry,
+	// retain log entries following it and reply
+	if len(rf.logEntries) > rf.getRelativeIndex(args.LastIncludedIndex) &&
+		rf.logEntries[rf.getRelativeIndex(args.LastIncludedIndex)].Term == args.LastIncludedTerm {
+
+	}
+
+	//TODO
 }
