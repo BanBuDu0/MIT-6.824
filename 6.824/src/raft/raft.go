@@ -183,7 +183,7 @@ func (rf *Raft) readPersist(data []byte) {
 	var lastIncludedIndex int
 	if d.Decode(&currentTerm) != nil || d.Decode(&voteFor) != nil ||
 		d.Decode(&logEntries) != nil || d.Decode(&lastIncludedTerm) != nil ||
-		d.Decode(lastIncludedIndex) != nil {
+		d.Decode(&lastIncludedIndex) != nil {
 		_, _ = DPrintf("readPersist error")
 	} else {
 		rf.mu.Lock()
