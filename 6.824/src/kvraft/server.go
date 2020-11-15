@@ -2,7 +2,6 @@ package kvraft
 
 import (
 	"bytes"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,15 +10,6 @@ import (
 	"../labrpc"
 	"../raft"
 )
-
-const Debug = 1
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug > 0 {
-		log.Printf(format, a...)
-	}
-	return
-}
 
 type Op struct {
 	// Your definitions here.
@@ -111,13 +101,24 @@ func (kv *KVServer) waitOp(op Op) bool {
 		kv.agreeChs[index] = agreeCh
 	}
 	kv.mu.Unlock()
+	_, _ = DPrintf("waitting agreeCh, kvserver: %d", kv.me)
 
 	select {
 	case agreeOp := <-agreeCh:
+		_, _ = DPrintf("waitting agreeCh success, kvserver: %d", kv.me)
 		if !(op.ClientId == agreeOp.ClientId && op.SerialNum == agreeOp.SerialNum) {
 			return false
 		}
 	case <-time.After(Timeout):
+		//kv.mu.Lock()
+		//defer kv.mu.Unlock()
+		//maxIndex, ok := kv.clientLastSeq[op.ClientId]
+		//if ok && op.SerialNum <= maxIndex {
+		//	_, _ = DPrintf("waitting agreeCh timeout, kvserver: %d, result: %v", kv.me, false)
+		//	return false
+		//}
+		//_, _ = DPrintf("waitting agreeCh timeout, kvserver: %d, result: %v", kv.me, true)
+		//return true
 		return false
 	}
 	return true
@@ -153,11 +154,9 @@ func (kv *KVServer) waitApply() {
 				}
 				kv.mu.Unlock()
 			} else {
-				_, _ = DPrintf("after install snapshot, come here")
 				switch msg.Command.(string) {
 				case "Snapshot":
 					_, _ = DPrintf("after install snapshot, reinstall snapshot in kv server")
-
 					kv.readSnapshot(msg.SnapshotData)
 				}
 			}
@@ -173,7 +172,8 @@ func (kv *KVServer) doSnapshot(lastApplyIndex int) {
 		kv.mu.Unlock()
 		return
 	}
-	_, _ = DPrintf("server: %d, start do snapshot", kv.me)
+	_, _ = DPrintf("server: %d, start do snapshot, maxraftstate: %d, kv.RaftStateSize: %d, kv.snapshotsize: %d",
+		kv.me, kv.maxraftstate, kv.persister.RaftStateSize(), kv.persister.SnapshotSize())
 	err1 := e.Encode(kv.db)
 	err2 := e.Encode(kv.clientLastSeq)
 	kv.mu.Unlock()
@@ -181,6 +181,8 @@ func (kv *KVServer) doSnapshot(lastApplyIndex int) {
 		_, _ = DPrintf("encode error")
 	}
 	kv.rf.DoSnapshot(lastApplyIndex, w.Bytes())
+	_, _ = DPrintf("server: %d, start do snapshot, maxraftstate: %d, kv.RaftStateSize: %d, kv.snapshotsize: %d",
+		kv.me, kv.maxraftstate, kv.persister.RaftStateSize(), kv.persister.SnapshotSize())
 }
 
 // read之前需要先搞明白snapshot里面有什么
@@ -251,7 +253,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// You may need initialization code here.
 
 	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, kv.persister, kv.applyCh)
+	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
 	kv.clientLastSeq = make(map[int64]int32)

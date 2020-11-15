@@ -445,24 +445,26 @@ func GenericTestLinearizability(t *testing.T, part string, nclients int, nserver
 	}
 }
 
+const maxstate int = 150
+
 func TestBasic3A(t *testing.T) {
 	// Test: one client (3A) ...
-	GenericTest(t, "3A", 1, false, false, false, -1)
+	GenericTest(t, "3A", 1, false, false, false, maxstate)
 }
 
 func TestConcurrent3A(t *testing.T) {
 	// Test: many clients (3A) ...
-	GenericTest(t, "3A", 5, false, false, false, -1)
+	GenericTest(t, "3A", 5, false, false, false, maxstate)
 }
 
 func TestUnreliable3A(t *testing.T) {
 	// Test: unreliable net, many clients (3A) ...
-	GenericTest(t, "3A", 5, true, false, false, -1)
+	GenericTest(t, "3A", 5, true, false, false, maxstate)
 }
 
 func TestUnreliableOneKey3A(t *testing.T) {
 	const nservers = 3
-	cfg := make_config(t, nservers, true, -1)
+	cfg := make_config(t, nservers, true, maxstate)
 	defer cfg.cleanup()
 
 	ck := cfg.makeClient(cfg.All())
@@ -497,7 +499,7 @@ func TestUnreliableOneKey3A(t *testing.T) {
 // network ends up in the minority partition.
 func TestOnePartition3A(t *testing.T) {
 	const nservers = 5
-	cfg := make_config(t, nservers, false, -1)
+	cfg := make_config(t, nservers, false, maxstate)
 	defer cfg.cleanup()
 	ck := cfg.makeClient(cfg.All())
 
@@ -572,42 +574,42 @@ func TestOnePartition3A(t *testing.T) {
 
 func TestManyPartitionsOneClient3A(t *testing.T) {
 	// Test: partitions, one client (3A) ...
-	GenericTest(t, "3A", 1, false, false, true, -1)
+	GenericTest(t, "3A", 1, false, false, true, maxstate)
 }
 
 func TestManyPartitionsManyClients3A(t *testing.T) {
 	// Test: partitions, many clients (3A) ...
-	GenericTest(t, "3A", 5, false, false, true, -1)
+	GenericTest(t, "3A", 5, false, false, true, maxstate)
 }
 
 func TestPersistOneClient3A(t *testing.T) {
 	// Test: restarts, one client (3A) ...
-	GenericTest(t, "3A", 1, false, true, false, -1)
+	GenericTest(t, "3A", 1, false, true, false, maxstate)
 }
 
 func TestPersistConcurrent3A(t *testing.T) {
 	// Test: restarts, many clients (3A) ...
-	GenericTest(t, "3A", 5, false, true, false, -1)
+	GenericTest(t, "3A", 5, false, true, false, maxstate)
 }
 
 func TestPersistConcurrentUnreliable3A(t *testing.T) {
 	// Test: unreliable net, restarts, many clients (3A) ...
-	GenericTest(t, "3A", 5, true, true, false, -1)
+	GenericTest(t, "3A", 5, true, true, false, maxstate)
 }
 
 func TestPersistPartition3A(t *testing.T) {
 	// Test: restarts, partitions, many clients (3A) ...
-	GenericTest(t, "3A", 5, false, true, true, -1)
+	GenericTest(t, "3A", 5, false, true, true, maxstate)
 }
 
 func TestPersistPartitionUnreliable3A(t *testing.T) {
 	// Test: unreliable net, restarts, partitions, many clients (3A) ...
-	GenericTest(t, "3A", 5, true, true, true, -1)
+	GenericTest(t, "3A", 5, true, true, true, maxstate)
 }
 
 func TestPersistPartitionUnreliableLinearizable3A(t *testing.T) {
 	// Test: unreliable net, restarts, partitions, linearizability checks (3A) ...
-	GenericTestLinearizability(t, "3A", 15, 7, true, true, true, -1)
+	GenericTestLinearizability(t, "3A", 15, 7, true, true, true, maxstate)
 }
 
 //
@@ -634,6 +636,7 @@ func TestSnapshotRPC3B(t *testing.T) {
 	{
 		ck1 := cfg.makeClient([]int{0, 1})
 		for i := 0; i < 50; i++ {
+			//fmt.Printf("loop: %d \n", i)
 			Put(cfg, ck1, strconv.Itoa(i), strconv.Itoa(i))
 		}
 		time.Sleep(electionTimeout)
@@ -671,8 +674,8 @@ func TestSnapshotRPC3B(t *testing.T) {
 	cfg.end()
 }
 
-// are the snapshots not too huge? 500 bytes is a generous bound for the
-// operations we're doing here.
+//are the snapshots not too huge? 500 bytes is a generous bound for the
+//operations we're doing here.
 func TestSnapshotSize3B(t *testing.T) {
 	const nservers = 3
 	maxraftstate := 1000

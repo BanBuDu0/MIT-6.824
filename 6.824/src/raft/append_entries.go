@@ -60,7 +60,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//}
 
 	// 如果在log里面找不到prevLogIndex
-	if rf.getAbsoluteIndex(len(rf.logEntries)-1) < args.PrevLogIndex {
+	if len(rf.logEntries)-1 < rf.getRelativeIndex(args.PrevLogIndex) {
 		reply.Success = false
 		reply.Term = rf.currentTerm
 		reply.ConflictIndex = rf.getAbsoluteIndex(len(rf.logEntries))

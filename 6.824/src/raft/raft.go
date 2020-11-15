@@ -416,11 +416,11 @@ func (rf *Raft) callAppendEntries() {
 						}
 					}
 				} else {
-					_, _ = DPrintf("peer: %v, AppendEntries Reply true: %+v", i, reply)
+					BPrintf("peer: %v, AppendEntries Reply true: %+v", i, reply)
 					//base on students-guide-to-raft
 					rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
 					rf.nextIndex[i] = rf.matchIndex[i] + 1
-					for j := len(rf.logEntries) - 1; j > rf.commitIndex; j-- {
+					for j := rf.getAbsoluteIndex(len(rf.logEntries) - 1); j > rf.commitIndex; j-- {
 						matched := 0
 						for _, matchIndex := range rf.matchIndex {
 							if matchIndex >= j {
@@ -428,7 +428,7 @@ func (rf *Raft) callAppendEntries() {
 							}
 							// log复制到了一半以上的peer
 							if matched > len(rf.peers)/2 {
-								rf.commitIndex = rf.getAbsoluteIndex(j)
+								rf.commitIndex = j
 								rf.applyMsg()
 								break
 							}
@@ -487,6 +487,14 @@ func (rf *Raft) applyMsg() {
 	// 因为这里使用的是go func，所以改变lastApplied的时候需要重新加锁
 	go func() {
 		rf.mu.Lock()
+		if rf.LastIncludedIndex > rf.lastApplied {
+			rf.lastApplied = rf.LastIncludedIndex
+		}
+
+		if rf.LastIncludedIndex > rf.commitIndex {
+			rf.commitIndex = rf.LastIncludedIndex
+		}
+
 		if rf.commitIndex > rf.lastApplied {
 			startIndex := rf.lastApplied + 1
 			endIndex := rf.commitIndex + 1
@@ -500,7 +508,7 @@ func (rf *Raft) applyMsg() {
 
 				rf.applyCh <- applyArgs
 				rf.lastApplied++
-				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v, lastApplied: %v, commitIndex: %v: Apply Msg %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.lastApplied, rf.commitIndex, applyArgs)
+				BPrintf("id: %d, voteFor: %v, role: %v, term: %v, lastApplied: %v, commitIndex: %v: Apply Msg %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.lastApplied, rf.commitIndex, applyArgs)
 			}
 		}
 		rf.mu.Unlock()
@@ -540,6 +548,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.nextIndex[rf.me] = index + 1
 		rf.matchIndex[rf.me] = index
 		rf.persist()
+		//go rf.callAppendEntries()
 	}
 
 	return index, term, isLeader
