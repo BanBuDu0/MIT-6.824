@@ -1,14 +1,15 @@
 package kvraft
 
 import (
-	"../labgob"
-	"../labrpc"
-	"../raft"
 	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"../labgob"
+	"../labrpc"
+	"../raft"
 )
 
 const Debug = 1
@@ -145,40 +146,54 @@ func (kv *KVServer) waitApply() {
 						_, _ = DPrintf("ERROR OP type")
 					}
 				}
-				kv.doSnapshot(msg.CommandIndex)
+				go kv.doSnapshot(msg.CommandIndex)
 				agreeCh, ok := kv.agreeChs[msg.CommandIndex]
 				if ok {
 					agreeCh <- op
 				}
 				kv.mu.Unlock()
+			} else {
+				_, _ = DPrintf("after install snapshot, come here")
+				switch msg.Command.(string) {
+				case "Snapshot":
+					_, _ = DPrintf("after install snapshot, reinstall snapshot in kv server")
+
+					kv.readSnapshot(msg.SnapshotData)
+				}
 			}
 		}
 	}
 }
 
 func (kv *KVServer) doSnapshot(lastApplyIndex int) {
-	if kv.maxraftstate < 0 || kv.persister.RaftStateSize() < kv.maxraftstate {
-		return
-	}
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
-	err := e.Encode(kv.db)
-	if err != nil {
-		_, _ = DPrintf("encode kv.db error")
+	kv.mu.Lock()
+	if kv.maxraftstate < 0 || kv.persister.RaftStateSize() < kv.maxraftstate {
+		kv.mu.Unlock()
+		return
+	}
+	_, _ = DPrintf("server: %d, start do snapshot", kv.me)
+	err1 := e.Encode(kv.db)
+	err2 := e.Encode(kv.clientLastSeq)
+	kv.mu.Unlock()
+	if err1 != nil || err2 != nil {
+		_, _ = DPrintf("encode error")
 	}
 	kv.rf.DoSnapshot(lastApplyIndex, w.Bytes())
 }
 
 // read之前需要先搞明白snapshot里面有什么
-func (kv *KVServer) readSnapshot() {
-	snapshot := kv.persister.ReadSnapshot()
+func (kv *KVServer) readSnapshot(snapshot []byte) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 	if snapshot == nil || len(snapshot) <= 0 {
 		return
 	}
 	r := bytes.NewBuffer(snapshot)
 	d := labgob.NewDecoder(r)
 
-	if d.Decode(&kv.db) != nil {
+	if d.Decode(&kv.db) != nil || d.Decode(&kv.clientLastSeq) != nil {
 		_, _ = DPrintf("kv server: %v, readSnapshot error", kv.me)
 	}
 }
@@ -243,7 +258,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.db = make(map[string]string)
 	kv.stopCh = make(chan struct{})
 	kv.agreeChs = make(map[int]chan Op)
-	kv.readSnapshot()
+	kv.readSnapshot(kv.persister.ReadSnapshot())
 
 	go kv.waitApply()
 	return kv

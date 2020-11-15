@@ -92,7 +92,6 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			serverId = int(nrand()) % len(ck.servers)
 			continue
 		}
-		//	TODO PutAppend 成功
 		return
 	}
 

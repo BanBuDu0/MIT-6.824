@@ -43,6 +43,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	SnapshotData []byte
 }
 
 type Role int
@@ -199,18 +200,17 @@ func (rf *Raft) readPersist(data []byte) {
 func (rf *Raft) DoSnapshot(lastApplyIndex int, serverData []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if lastApplyIndex > rf.commitIndex {
+	if lastApplyIndex <= rf.LastIncludedIndex {
 		return
 	}
 
-	BPrintf("server: %d, LastIncludedIndex: %d, log: %v", rf.me, rf.LastIncludedIndex, len(rf.logEntries))
+	BPrintf("server: %d, lastApplyIndex: %d, LastIncludedIndex: %d, log: %v", rf.me, lastApplyIndex, rf.LastIncludedIndex, len(rf.logEntries))
 
 	rf.LastIncludedTerm = rf.logEntries[rf.getRelativeIndex(lastApplyIndex)].Term
-	rf.logEntries = rf.logEntries[rf.getRelativeIndex(lastApplyIndex+1):]
+	rf.logEntries = append(make([]Entry, 0), rf.logEntries[rf.getRelativeIndex(lastApplyIndex):]...)
+	//rf.logEntries = rf.logEntries[rf.getRelativeIndex(lastApplyIndex):]
 	rf.LastIncludedIndex = lastApplyIndex
-
-	BPrintf("server: %d, LastIncludedIndex: %d, log: %v", rf.me, rf.LastIncludedIndex, len(rf.logEntries))
-
+	BPrintf("server: %d, lastApplyIndex: %d, LastIncludedIndex: %d, log: %v", rf.me, lastApplyIndex, rf.LastIncludedIndex, len(rf.logEntries))
 	rf.persister.SaveStateAndSnapshot(rf.genPersistData(), serverData)
 }
 
@@ -282,7 +282,7 @@ func (rf *Raft) changeRole(role Role) {
 		}
 
 		for index := range rf.matchIndex {
-			rf.matchIndex[index] = 0
+			rf.matchIndex[index] = rf.LastIncludedIndex
 		}
 
 		rf.electionTime.Stop()
@@ -329,7 +329,7 @@ func (rf *Raft) startElection() {
 					atomic.AddInt32(&voteNum, 1)
 					//如果获得票数超过一半了，就当选leader
 					if atomic.LoadInt32(&voteNum) > rf.halfPeerNum && rf.mRole == CANDIDATE {
-						_, _ = DPrintf("id: %v become leader, raft: %+v", rf.me, rf)
+						_, _ = DPrintf("id: %v become leader", rf.me)
 						rf.changeRole(LEADER)
 					}
 				} else {
@@ -348,7 +348,7 @@ func (rf *Raft) startElection() {
 
 //给每个peer发送添加entry的RPC
 func (rf *Raft) callAppendEntries() {
-	_, _ = DPrintf("start callAppendEntries, raft: %+v", rf)
+	_, _ = DPrintf("start callAppendEntries, raft: %+v", rf.me)
 	for index := range rf.peers {
 		if index == rf.me {
 			continue
@@ -356,8 +356,14 @@ func (rf *Raft) callAppendEntries() {
 		go func(i int) {
 			rf.mu.Lock()
 			prevLogIndex := rf.nextIndex[i] - 1
-			_, _ = DPrintf("%v send AppendEntries RPC to %v， prevLogIndex: %v", rf.me, i, prevLogIndex)
-			BPrintf("%v send AppendEntries RPC to %v, nextIndex = %v, rf.LastIncludeIndex = %d", rf.me, i, rf.nextIndex, rf.LastIncludedIndex)
+			BPrintf("%v send AppendEntries RPC to %v, nextIndex = %v, prevLogIndex = %d, rf.LastIncludeIndex = %d", rf.me, i, rf.nextIndex, prevLogIndex, rf.LastIncludedIndex)
+
+			if prevLogIndex < rf.LastIncludedIndex {
+				rf.mu.Unlock()
+				rf.callInstallSnapshot(i)
+				return
+			}
+			BPrintf("got hear, %d to %d", rf.me, i)
 
 			args := AppendEntriesArgs{
 				Term:         rf.currentTerm,
@@ -376,7 +382,6 @@ func (rf *Raft) callAppendEntries() {
 			// 又因为上面的RPC肯定比本地函数退栈更耗时间，所以这里再锁的时候前面changeRole函数外面的锁早就已经解开了
 			rf.mu.Lock()
 			if ok {
-				_, _ = DPrintf("id: %d, peer: %v, role: %v, term: %v: call append entries success, reply: %+v", rf.me, i, rf.mRole, rf.currentTerm, reply)
 				if rf.mRole != LEADER {
 					rf.mu.Unlock()
 					return
@@ -394,7 +399,10 @@ func (rf *Raft) callAppendEntries() {
 						if reply.ConflictIndex != -1 {
 							if reply.ConflictIndex <= rf.LastIncludedIndex {
 								//	如果 ConflictIndex 已经被snapshot了，则需要发送 InstallSnapshotRPC
-
+								// 把发送SnapshotRPC放在这里会有问题
+								// 因为每个server都是自己自动做snapshot的
+								// 所以当leader自己做了一遍snapshot之后上面的取AppendEntriesArgs时会出错。。。
+								// rf.callInstallSnapshot(i)
 							} else {
 								rf.nextIndex[i] = reply.ConflictIndex
 								_, _ = DPrintf("peer: %v not match, nextIndex: %v", i, rf.nextIndex[i])
@@ -436,6 +444,8 @@ func (rf *Raft) callAppendEntries() {
 }
 
 func (rf *Raft) callInstallSnapshot(server int) {
+	rf.mu.Lock()
+	BPrintf("%v send InstallSnapshot RPC to %v", rf.me, server)
 	arg := InstallSnapshotArgs{
 		Term:              rf.currentTerm,
 		LeaderId:          rf.me,
@@ -443,23 +453,32 @@ func (rf *Raft) callInstallSnapshot(server int) {
 		LastIncludedTerm:  rf.LastIncludedTerm,
 		Snapshot:          rf.persister.ReadSnapshot(),
 	}
+	rf.mu.Unlock()
 	reply := InstallSnapshotReply{}
 	ok := rf.sendInstallSnapshot(server, &arg, &reply)
 	if !ok {
-		_, _ = DPrintf("callInstallSnapshot error")
+		BPrintf("%v callInstallSnapshot error %d", rf.me, server)
 		return
 	}
+	BPrintf("callInstallSnapshot success, %d to %d", rf.me, server)
 
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if rf.mRole != LEADER {
 		return
 	}
 
 	if reply.Term > rf.currentTerm {
-		_, _ = DPrintf("callInstallSnapshot, id: %d, voteFor: %v, role: %v, term: %v: someone's term is large than me, and i will change term form %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm, reply.Term)
+		BPrintf("callInstallSnapshot, id: %d, voteFor: %v, role: %v, term: %v: someone's term is large than me, and i will change term form %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm, reply.Term)
 		rf.currentTerm = reply.Term
 		rf.changeRole(FOLLOWER)
 		return
 	}
+
+	if rf.matchIndex[server] < arg.LastIncludedIndex {
+		rf.matchIndex[server] = arg.LastIncludedIndex
+	}
+	rf.nextIndex[server] = rf.matchIndex[server] + 1
 
 }
 

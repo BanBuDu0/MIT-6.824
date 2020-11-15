@@ -26,7 +26,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//args.PrevLogIndex = 5
 	//args.Entries = 6 7 8
 
-	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get heartbeat from %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID)
 	reply.ConflictIndex = -1
 	reply.ConflictTerm = -1
 
@@ -74,8 +73,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		conflictTerm = rf.logEntries[rf.getRelativeIndex(args.PrevLogIndex)].Term
 	}
 	if conflictTerm != -1 {
-		for i := args.PrevLogIndex; i >= 0; i-- {
-			if rf.logEntries[rf.getRelativeIndex(i)].Term != conflictTerm || i == 0 {
+		for i := args.PrevLogIndex; i >= rf.LastIncludedIndex; i-- {
+			if rf.logEntries[rf.getRelativeIndex(i)].Term != conflictTerm || i == rf.LastIncludedIndex {
 				reply.Success = false
 				reply.Term = rf.currentTerm
 				reply.ConflictIndex = i + 1
@@ -106,7 +105,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.Success = true
 	reply.Term = rf.currentTerm
-	_, _ = DPrintf("peer: %v, reply true, and now he is: %+v", rf.me, rf)
+	_, _ = DPrintf("peer: %v, reply true", rf.me)
 	// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	if args.LeaderCommit > rf.commitIndex {
 		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get AppendEntries from %v, rely on #5, I will set my commitIndex = %v, and apply the msg to my state machine", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID, int(math.Min(float64(args.LeaderCommit), float64(len(rf.logEntries)-1))))

@@ -10,8 +10,7 @@ type InstallSnapshotArgs struct {
 }
 
 type InstallSnapshotReply struct {
-	Term    int
-	Success bool
+	Term int
 }
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
@@ -21,7 +20,6 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	// 1.Reply immediately if term < currentTerm
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
-		reply.Success = false
 		return
 	}
 
@@ -30,12 +28,43 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.changeRole(FOLLOWER)
 	}
 
-	// 6.If existing log entry has same index and term as snapshot’s last included entry,
-	// retain log entries following it and reply
-	if len(rf.logEntries) > rf.getRelativeIndex(args.LastIncludedIndex) &&
-		rf.logEntries[rf.getRelativeIndex(args.LastIncludedIndex)].Term == args.LastIncludedTerm {
-
+	if args.LastIncludedIndex <= rf.LastIncludedIndex {
+		return
 	}
 
-	//TODO
+	if len(rf.logEntries) > rf.getRelativeIndex(args.LastIncludedIndex) &&
+		rf.logEntries[rf.getRelativeIndex(args.LastIncludedIndex)].Term == args.LastIncludedTerm {
+		// 6.If existing log entry has same index and term as snapshot’s last included entry,
+		// retain log entries following it and reply
+		rf.logEntries = rf.logEntries[rf.getRelativeIndex(args.LastIncludedIndex):]
+	} else {
+		// 7.Discard the entire log
+		rf.logEntries = make([]Entry, 1)
+		rf.logEntries[0].Term = args.LastIncludedTerm
+	}
+
+	// 8.Reset state machine using snapshot contents (and load snapshot’s cluster configuration)
+	rf.LastIncludedIndex = args.LastIncludedIndex
+	rf.LastIncludedTerm = args.LastIncludedTerm
+	if args.LastIncludedIndex > rf.commitIndex {
+		rf.commitIndex = args.LastIncludedIndex
+	}
+	if args.LastIncludedIndex > rf.lastApplied {
+		rf.lastApplied = args.LastIncludedIndex
+	}
+	rf.persister.SaveStateAndSnapshot(rf.genPersistData(), args.Snapshot)
+	reply.Term = rf.currentTerm
+	if rf.lastApplied > rf.LastIncludedIndex {
+		return
+	}
+	msg := ApplyMsg{
+		CommandValid: false,
+		Command:      "Snapshot",
+		CommandIndex: rf.LastIncludedIndex,
+		SnapshotData: rf.persister.ReadSnapshot(),
+	}
+
+	go func(msg ApplyMsg) {
+		rf.applyCh <- msg
+	}(msg)
 }
