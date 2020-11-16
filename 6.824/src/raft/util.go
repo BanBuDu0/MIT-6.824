@@ -13,7 +13,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 func BPrintf(format string, a ...interface{}) {
-	if Debug == 2 {
+	if Debug == 1 {
 		log.Printf(format, a...)
 	}
 	return

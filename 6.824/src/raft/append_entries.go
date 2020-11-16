@@ -58,7 +58,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//	reply.Term = rf.currentTerm
 	//	return
 	//}
-
 	// 如果在log里面找不到prevLogIndex
 	if len(rf.logEntries)-1 < rf.getRelativeIndex(args.PrevLogIndex) {
 		reply.Success = false
@@ -110,7 +109,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.LeaderCommit > rf.commitIndex {
 		_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get AppendEntries from %v, rely on #5, I will set my commitIndex = %v, and apply the msg to my state machine", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID, int(math.Min(float64(args.LeaderCommit), float64(len(rf.logEntries)-1))))
 		lastNewEntry := rf.getAbsoluteIndex(len(rf.logEntries) - 1)
-		rf.commitIndex = int(math.Min(float64(args.LeaderCommit), float64(lastNewEntry)))
+		if args.LeaderCommit < lastNewEntry {
+			rf.commitIndex = args.LeaderCommit
+		} else {
+			rf.commitIndex = lastNewEntry
+		}
 		rf.applyMsg()
 	}
 }

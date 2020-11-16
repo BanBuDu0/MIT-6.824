@@ -445,7 +445,7 @@ func GenericTestLinearizability(t *testing.T, part string, nclients int, nserver
 	}
 }
 
-const maxstate int = 150
+const maxstate int = -1
 
 func TestBasic3A(t *testing.T) {
 	// Test: one client (3A) ...

@@ -3,7 +3,6 @@ package kvraft
 import (
 	"../labrpc"
 	"sync/atomic"
-	"time"
 )
 import "crypto/rand"
 import "math/big"
@@ -58,7 +57,6 @@ func (ck *Clerk) Get(key string) string {
 		ok := server.Call("KVServer.Get", args, reply)
 		if ok == false || reply.Err == ErrWrongLeader {
 			serverId = int(nrand()) % len(ck.servers)
-			time.Sleep(time.Duration(100) * time.Millisecond)
 			continue
 		}
 		return reply.Value
@@ -92,7 +90,6 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		ok := server.Call("KVServer.PutAppend", args, reply)
 		if ok == false || reply.Err == ErrWrongLeader {
 			serverId = int(nrand()) % len(ck.servers)
-			time.Sleep(time.Duration(100) * time.Millisecond)
 			continue
 		}
 		return

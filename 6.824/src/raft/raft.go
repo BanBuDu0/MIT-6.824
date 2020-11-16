@@ -71,12 +71,11 @@ func randomizedElectionTimeouts() time.Duration {
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu          sync.Mutex          // Lock to protect shared access to this peer's state
-	peers       []*labrpc.ClientEnd // RPC end points of all peers
-	persister   *Persister          // Object to hold this peer's persisted state
-	me          int                 // this peer's index into peers[]
-	dead        int32               // set by Kill()
-	halfPeerNum int32
+	mu        sync.Mutex          // Lock to protect shared access to this peer's state
+	peers     []*labrpc.ClientEnd // RPC end points of all peers
+	persister *Persister          // Object to hold this peer's persisted state
+	me        int                 // this peer's index into peers[]
+	dead      int32               // set by Kill()
 
 	//2A
 	stopCh       chan struct{}
@@ -193,6 +192,8 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.currentTerm = currentTerm
 		rf.LastIncludedIndex = lastIncludedIndex
 		rf.LastIncludedTerm = lastIncludedTerm
+		rf.commitIndex = lastIncludedIndex
+		rf.lastApplied = lastIncludedIndex
 		rf.mu.Unlock()
 	}
 }
@@ -284,7 +285,6 @@ func (rf *Raft) changeRole(role Role) {
 		for index := range rf.matchIndex {
 			rf.matchIndex[index] = rf.LastIncludedIndex
 		}
-
 		rf.electionTime.Stop()
 		rf.appendTime.Reset(HeartBeatTimeout)
 		go rf.callAppendEntries()
@@ -314,34 +314,42 @@ func (rf *Raft) startElection() {
 	rf.mu.Unlock()
 
 	var voteNum int32
+	voteNum = 1
 	for index := range rf.peers {
 		if index == rf.me {
-			atomic.AddInt32(&voteNum, 1)
 			continue
 		}
 		go func(i int) {
 			var reply RequestVoteReply
 			_, _ = DPrintf("id: %v send request vote to %v, args: %+v", rf.me, i, args)
-			s := rf.sendRequestVote(i, &args, &reply)
+			ok := rf.sendRequestVote(i, &args, &reply)
 			rf.mu.Lock()
-			if s {
-				if reply.VoteGranted && rf.currentTerm >= reply.Term {
-					atomic.AddInt32(&voteNum, 1)
-					//如果获得票数超过一半了，就当选leader
-					if atomic.LoadInt32(&voteNum) > rf.halfPeerNum && rf.mRole == CANDIDATE {
-						_, _ = DPrintf("id: %v become leader", rf.me)
-						rf.changeRole(LEADER)
-					}
-				} else {
-					if rf.currentTerm < reply.Term {
-						rf.currentTerm = reply.Term
-						rf.changeRole(FOLLOWER)
-					}
-				}
-			} else {
-				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: sendRequestVote to %v ERROR", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
+			defer rf.mu.Unlock()
+
+			//students-guide-to-raft, Term confusion, what you should do when you get old RPC replies.
+			//compare the current term with the term you sent in your original RPC.
+			//If the two are different, drop the reply and return.
+			if !ok || rf.mRole != CANDIDATE || rf.currentTerm != args.Term {
+				_, _ = DPrintf("RequestVote early return, ok: %v, mRole: %v, condition3: %v",
+					ok, rf.mRole, rf.currentTerm != args.Term)
+				return
 			}
-			rf.mu.Unlock()
+
+			if rf.currentTerm < reply.Term {
+				rf.currentTerm = reply.Term
+				rf.changeRole(FOLLOWER)
+				return
+			}
+
+			if reply.VoteGranted {
+				atomic.AddInt32(&voteNum, 1)
+				//如果获得票数超过一半了，就当选leader
+				if atomic.LoadInt32(&voteNum) > (int32)(len(rf.peers)/2) {
+					_, _ = DPrintf("id: %v become leader", rf.me)
+					rf.changeRole(LEADER)
+				}
+			}
+
 		}(index)
 	}
 }
@@ -354,91 +362,93 @@ func (rf *Raft) callAppendEntries() {
 			continue
 		}
 		go func(i int) {
-			rf.mu.Lock()
-			prevLogIndex := rf.nextIndex[i] - 1
-			BPrintf("%v send AppendEntries RPC to %v, nextIndex = %v, prevLogIndex = %d, rf.LastIncludeIndex = %d", rf.me, i, rf.nextIndex, prevLogIndex, rf.LastIncludedIndex)
+			for {
+				rf.mu.Lock()
+				prevLogIndex := rf.nextIndex[i] - 1
+				BPrintf("%v send AppendEntries RPC to %v, nextIndex = %v, prevLogIndex = %d, rf.LastIncludeIndex = %d", rf.me, i, rf.nextIndex, prevLogIndex, rf.LastIncludedIndex)
 
-			if prevLogIndex < rf.LastIncludedIndex {
+				if prevLogIndex < rf.LastIncludedIndex {
+					rf.mu.Unlock()
+					rf.callInstallSnapshot(i)
+					return
+				}
+				BPrintf("got hear, %d to %d", rf.me, i)
+
+				args := AppendEntriesArgs{
+					Term:         rf.currentTerm,
+					LeaderID:     rf.me,
+					PrevLogIndex: prevLogIndex,
+					PrevLogTerm:  rf.logEntries[rf.getRelativeIndex(prevLogIndex)].Term,
+					LeaderCommit: rf.commitIndex,
+					Entries:      append(make([]Entry, 0), rf.logEntries[rf.getRelativeIndex(rf.nextIndex[i]):]...),
+				}
+
+				_, _ = DPrintf("AppendEntriesArgs to peer %v: %+v", i, args)
 				rf.mu.Unlock()
-				rf.callInstallSnapshot(i)
-				return
-			}
-			BPrintf("got hear, %d to %d", rf.me, i)
 
-			args := AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderID:     rf.me,
-				PrevLogIndex: prevLogIndex,
-				PrevLogTerm:  rf.logEntries[rf.getRelativeIndex(prevLogIndex)].Term,
-				LeaderCommit: rf.commitIndex,
-				Entries:      rf.logEntries[rf.getRelativeIndex(rf.nextIndex[i]):],
-			}
-			_, _ = DPrintf("AppendEntriesArgs to peer %v: %+v", i, args)
-			rf.mu.Unlock()
+				reply := AppendEntriesReply{}
+				ok := rf.sendAppendEntries(i, &args, &reply)
+				// 这里为什么又可以加锁呢，因为这是在go func里面，外面的锁不会进入到go func里面来，
+				// 又因为上面的RPC肯定比本地函数退栈更耗时间，所以这里再锁的时候前面changeRole函数外面的锁早就已经解开了
+				rf.mu.Lock()
 
-			reply := AppendEntriesReply{}
-			ok := rf.sendAppendEntries(i, &args, &reply)
-			// 这里为什么又可以加锁呢，因为这是在go func里面，外面的锁不会进入到go func里面来，
-			// 又因为上面的RPC肯定比本地函数退栈更耗时间，所以这里再锁的时候前面changeRole函数外面的锁早就已经解开了
-			rf.mu.Lock()
-			if ok {
-				if rf.mRole != LEADER {
+				//students-guide-to-raft, Term confusion, what you should do when you get old RPC replies.
+				//compare the current term with the term you sent in your original RPC.
+				//If the two are different, drop the reply and return.
+				if !ok || rf.mRole != LEADER || rf.currentTerm != args.Term {
+					_, _ = DPrintf("AppendEntries early return, ok: %v, mRole: %v, condition3: %v",
+						ok, rf.mRole, rf.currentTerm != args.Term)
+					rf.mu.Unlock()
+					return
+				}
+
+				if reply.Term > rf.currentTerm {
+					_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: someone's term is large than me, and i will change term form %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm, reply.Term)
+					rf.currentTerm = reply.Term
+					rf.changeRole(FOLLOWER)
 					rf.mu.Unlock()
 					return
 				}
 
 				if !reply.Success {
 					_, _ = DPrintf("AppendEntries Reply from peer: %v false: %+v", i, reply)
-					if reply.Term > rf.currentTerm {
-						_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: someone's term is large than me, and i will change term form %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm, reply.Term)
-						rf.currentTerm = reply.Term
-						rf.changeRole(FOLLOWER)
-					} else {
-						// 如果append失败的话就往前减少nextIndex继续append
-						// based on students-guide-to-raft accelerated log backtracking optimization
-						if reply.ConflictIndex != -1 {
-							if reply.ConflictIndex <= rf.LastIncludedIndex {
-								//	如果 ConflictIndex 已经被snapshot了，则需要发送 InstallSnapshotRPC
-								// 把发送SnapshotRPC放在这里会有问题
-								// 因为每个server都是自己自动做snapshot的
-								// 所以当leader自己做了一遍snapshot之后上面的取AppendEntriesArgs时会出错。。。
-								// rf.callInstallSnapshot(i)
-							} else {
-								rf.nextIndex[i] = reply.ConflictIndex
-								_, _ = DPrintf("peer: %v not match, nextIndex: %v", i, rf.nextIndex[i])
-								for j := args.PrevLogIndex; j >= rf.LastIncludedIndex+1; j-- {
-									if rf.logEntries[rf.getRelativeIndex(j-1)].Term == reply.Term {
-										rf.nextIndex[i] = j
-										break
-									}
-								}
+					// 如果append失败的话就往前减少nextIndex继续append
+					// based on students-guide-to-raft accelerated log backtracking optimization
+					if reply.ConflictIndex != -1 {
+						rf.nextIndex[i] = reply.ConflictIndex
+						_, _ = DPrintf("peer: %v not match, nextIndex: %v", i, rf.nextIndex[i])
+						for j := args.PrevLogIndex; j >= rf.LastIncludedIndex+1; j-- {
+							if rf.logEntries[rf.getRelativeIndex(j-1)].Term == reply.Term {
+								rf.nextIndex[i] = j
+								break
 							}
 						}
+						rf.mu.Unlock()
 					}
 				} else {
 					BPrintf("peer: %v, AppendEntries Reply true: %+v", i, reply)
 					//base on students-guide-to-raft
 					rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
 					rf.nextIndex[i] = rf.matchIndex[i] + 1
+					rf.matchIndex[rf.me] = rf.getAbsoluteIndex(len(rf.logEntries) - 1)
 					for j := rf.getAbsoluteIndex(len(rf.logEntries) - 1); j > rf.commitIndex; j-- {
 						matched := 0
 						for _, matchIndex := range rf.matchIndex {
 							if matchIndex >= j {
 								matched++
-							}
-							// log复制到了一半以上的peer
-							if matched > len(rf.peers)/2 {
-								rf.commitIndex = j
-								rf.applyMsg()
-								break
+								// log复制到了一半以上的peer
+								if matched > len(rf.peers)/2 {
+									rf.commitIndex = j
+									rf.applyMsg()
+									break
+								}
 							}
 						}
 					}
+					rf.mu.Unlock()
+					return
 				}
-			} else {
-				_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: call append entries error %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, i)
 			}
-			rf.mu.Unlock()
 		}(index)
 	}
 }
@@ -475,9 +485,7 @@ func (rf *Raft) callInstallSnapshot(server int) {
 		return
 	}
 
-	if rf.matchIndex[server] < arg.LastIncludedIndex {
-		rf.matchIndex[server] = arg.LastIncludedIndex
-	}
+	rf.matchIndex[server] = arg.LastIncludedIndex
 	rf.nextIndex[server] = rf.matchIndex[server] + 1
 
 }
@@ -485,34 +493,36 @@ func (rf *Raft) callInstallSnapshot(server int) {
 func (rf *Raft) applyMsg() {
 	// apply to state machine
 	// 因为这里使用的是go func，所以改变lastApplied的时候需要重新加锁
-	go func() {
-		rf.mu.Lock()
-		if rf.LastIncludedIndex > rf.lastApplied {
-			rf.lastApplied = rf.LastIncludedIndex
-		}
+	if rf.LastIncludedIndex > rf.lastApplied {
+		rf.lastApplied = rf.LastIncludedIndex
+	}
 
-		if rf.LastIncludedIndex > rf.commitIndex {
-			rf.commitIndex = rf.LastIncludedIndex
-		}
+	if rf.LastIncludedIndex > rf.commitIndex {
+		rf.commitIndex = rf.LastIncludedIndex
+	}
 
-		if rf.commitIndex > rf.lastApplied {
-			startIndex := rf.lastApplied + 1
-			endIndex := rf.commitIndex + 1
-			logs := rf.logEntries[rf.getRelativeIndex(startIndex):rf.getRelativeIndex(endIndex)]
-			for index, log := range logs {
+	if rf.commitIndex > rf.lastApplied {
+		startIndex := rf.lastApplied + 1
+		endIndex := rf.commitIndex + 1
+		logs := rf.logEntries[rf.getRelativeIndex(startIndex):rf.getRelativeIndex(endIndex)]
+		go func(startIdx int, logEntries []Entry) {
+			for index, log := range logEntries {
 				applyArgs := ApplyMsg{
 					Command:      log.Commend,
 					CommandValid: true,
-					CommandIndex: startIndex + index,
+					CommandIndex: startIdx + index,
 				}
 
 				rf.applyCh <- applyArgs
-				rf.lastApplied++
+				rf.mu.Lock()
+				if rf.lastApplied < applyArgs.CommandIndex {
+					rf.lastApplied = applyArgs.CommandIndex
+				}
 				BPrintf("id: %d, voteFor: %v, role: %v, term: %v, lastApplied: %v, commitIndex: %v: Apply Msg %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.lastApplied, rf.commitIndex, applyArgs)
+				rf.mu.Unlock()
 			}
-		}
-		rf.mu.Unlock()
-	}()
+		}(startIndex, logs)
+	}
 }
 
 //
@@ -548,7 +558,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.nextIndex[rf.me] = index + 1
 		rf.matchIndex[rf.me] = index
 		rf.persist()
-		//go rf.callAppendEntries()
+		rf.appendTime.Reset(HeartBeatTimeout)
+		go rf.callAppendEntries()
 	}
 
 	return index, term, isLeader
@@ -599,7 +610,6 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	rf.votedFor = -1
 	rf.electionTime = time.NewTimer(randomizedElectionTimeouts())
 	rf.appendTime = time.NewTimer(HeartBeatTimeout)
-	rf.halfPeerNum = (int32)(len(rf.peers) / 2)
 	rf.stopCh = make(chan struct{})
 	rf.nextIndex = make([]int, len(rf.peers))
 	//第一次添加log就从1开始添加
