@@ -293,11 +293,8 @@ func (rf *Raft) changeRole(role Role) {
 
 func (rf *Raft) startElection() {
 	rf.mu.Lock()
-	_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: start election", rf.me, rf.votedFor, rf.mRole, rf.currentTerm)
-
 	rf.electionTime.Reset(randomizedElectionTimeouts())
 	if rf.mRole == LEADER {
-		_, _ = DPrintf("%d already leader", rf.me)
 		return
 	}
 
@@ -321,7 +318,6 @@ func (rf *Raft) startElection() {
 		}
 		go func(i int) {
 			var reply RequestVoteReply
-			_, _ = DPrintf("id: %v send request vote to %v, args: %+v", rf.me, i, args)
 			ok := rf.sendRequestVote(i, &args, &reply)
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
@@ -365,14 +361,12 @@ func (rf *Raft) callAppendEntries() {
 			for {
 				rf.mu.Lock()
 				prevLogIndex := rf.nextIndex[i] - 1
-				BPrintf("%v send AppendEntries RPC to %v, nextIndex = %v, prevLogIndex = %d, rf.LastIncludeIndex = %d", rf.me, i, rf.nextIndex, prevLogIndex, rf.LastIncludedIndex)
 
 				if prevLogIndex < rf.LastIncludedIndex {
 					rf.mu.Unlock()
 					rf.callInstallSnapshot(i)
 					return
 				}
-				BPrintf("got hear, %d to %d", rf.me, i)
 
 				args := AppendEntriesArgs{
 					Term:         rf.currentTerm,
@@ -383,7 +377,7 @@ func (rf *Raft) callAppendEntries() {
 					Entries:      append(make([]Entry, 0), rf.logEntries[rf.getRelativeIndex(rf.nextIndex[i]):]...),
 				}
 
-				_, _ = DPrintf("AppendEntriesArgs to peer %v: %+v", i, args)
+				BPrintf("%v send AppendEntries RPC to %v, nextIndex = %v, prevLogIndex = %d, rf.LastIncludeIndex = %d， log len: %d", rf.me, i, rf.nextIndex, prevLogIndex, rf.LastIncludedIndex, len(args.Entries))
 				rf.mu.Unlock()
 
 				reply := AppendEntriesReply{}
@@ -410,8 +404,8 @@ func (rf *Raft) callAppendEntries() {
 					return
 				}
 
+				_, _ = DPrintf("AppendEntries Reply from peer: %v false: %+v", i, reply)
 				if !reply.Success {
-					_, _ = DPrintf("AppendEntries Reply from peer: %v false: %+v", i, reply)
 					// 如果append失败的话就往前减少nextIndex继续append
 					// based on students-guide-to-raft accelerated log backtracking optimization
 					if reply.ConflictIndex != -1 {
@@ -426,7 +420,6 @@ func (rf *Raft) callAppendEntries() {
 						rf.mu.Unlock()
 					}
 				} else {
-					BPrintf("peer: %v, AppendEntries Reply true: %+v", i, reply)
 					//base on students-guide-to-raft
 					rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
 					rf.nextIndex[i] = rf.matchIndex[i] + 1
@@ -439,6 +432,7 @@ func (rf *Raft) callAppendEntries() {
 								// log复制到了一半以上的peer
 								if matched > len(rf.peers)/2 {
 									rf.commitIndex = j
+									_, _ = DPrintf("leader: %d, apply msg, matchIndex: %+v, nextIndex: %+v, lastApply: %d, commitIndex: %d", rf.me, rf.matchIndex, rf.nextIndex, rf.lastApplied, rf.commitIndex)
 									rf.applyMsg()
 									break
 								}
