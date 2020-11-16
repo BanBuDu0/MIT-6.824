@@ -1,5 +1,7 @@
 package raft
 
+import "math"
+
 type AppendEntriesArgs struct {
 	Term         int
 	LeaderID     int
@@ -57,7 +59,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//	return
 	//}
 	// 如果在log里面找不到prevLogIndex
-	if len(rf.logEntries)-1 < rf.getRelativeIndex(args.PrevLogIndex) {
+	if rf.getAbsoluteIndex(len(rf.logEntries)-1) < args.PrevLogIndex {
 		reply.Success = false
 		reply.Term = rf.currentTerm
 		reply.ConflictIndex = rf.getAbsoluteIndex(len(rf.logEntries))
@@ -94,7 +96,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 	if conflictIndex != -1 {
-		//_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get AppendEntries from %v, rely on #3, I find a conflict index, i will delete the existing entry and all that follow it", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID)
+		_, _ = DPrintf("id: %d, term: %v: get AppendEntries from %v, rely on #3, find conflictIndex: %d, delete the existing entry and all that follow it", rf.me, rf.currentTerm, conflictIndex, args.LeaderID)
 		rf.logEntries = rf.logEntries[:rf.getRelativeIndex(args.PrevLogIndex+1+conflictIndex)]
 		rf.logEntries = append(rf.logEntries, args.Entries[conflictIndex:]...)
 		rf.persist()
@@ -105,7 +107,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	_, _ = DPrintf("peer: %v, reply true", rf.me)
 	// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	if args.LeaderCommit > rf.commitIndex {
-		//_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: get AppendEntries from %v, rely on #5, I will set my commitIndex = %v, and apply the msg to my state machine", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, args.LeaderID, int(math.Min(float64(args.LeaderCommit), float64(len(rf.logEntries)-1))))
+		_, _ = DPrintf("id: %d, term: %v: get AppendEntries from %v, rely on #5, set commitIndex = %v, and apply msg", rf.me, rf.currentTerm, args.LeaderID, int(math.Min(float64(args.LeaderCommit), float64(len(rf.logEntries)-1))))
 		lastNewEntry := rf.getAbsoluteIndex(len(rf.logEntries) - 1)
 		if args.LeaderCommit < lastNewEntry {
 			rf.commitIndex = args.LeaderCommit
