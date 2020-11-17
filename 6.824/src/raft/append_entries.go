@@ -96,7 +96,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 	if conflictIndex != -1 {
-		_, _ = DPrintf("id: %d, term: %v: get AppendEntries from %v, rely on #3, find conflictIndex: %d, delete the existing entry and all that follow it", rf.me, rf.currentTerm, conflictIndex, args.LeaderID)
+		_, _ = DPrintf("id: %d, term: %v: get AppendEntries from %v, rely on #3, find conflictIndex: %d, delete the existing entry and all that follow it", rf.me, rf.currentTerm, args.LeaderID, conflictIndex)
 		rf.logEntries = rf.logEntries[:rf.getRelativeIndex(args.PrevLogIndex+1+conflictIndex)]
 		rf.logEntries = append(rf.logEntries, args.Entries[conflictIndex:]...)
 		rf.persist()
