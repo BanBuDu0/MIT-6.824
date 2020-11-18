@@ -298,236 +298,37 @@ func (rf *Raft) changeRole(role Role) {
 	}
 }
 
-func (rf *Raft) startElection() {
-	rf.mu.Lock()
-	rf.electionTime.Reset(randomizedElectionTimeouts())
-	if rf.mRole == LEADER {
-		return
-	}
-
-	rf.changeRole(CANDIDATE)
-
-	lastLogIndex := len(rf.logEntries) - 1
-
-	args := RequestVoteArgs{
-		Term:         rf.currentTerm,
-		CandidateId:  rf.me,
-		LastLogIndex: rf.getAbsoluteIndex(lastLogIndex),
-		LastLogTerm:  rf.logEntries[lastLogIndex].Term,
-	}
-	rf.mu.Unlock()
-
-	var voteNum int32
-	voteNum = 1
-	for index := range rf.peers {
-		if index == rf.me {
-			continue
-		}
-		go func(i int) {
-			var reply RequestVoteReply
-			ok := rf.sendRequestVote(i, &args, &reply)
-			rf.mu.Lock()
-			defer rf.mu.Unlock()
-
-			//students-guide-to-raft, Term confusion, what you should do when you get old RPC replies.
-			//compare the current term with the term you sent in your original RPC.
-			//If the two are different, drop the reply and return.
-			if !ok || rf.mRole != CANDIDATE || rf.currentTerm != args.Term {
-				_, _ = DPrintf("%d RequestVote early return %d, !ok: %v, mRole: %v, condition3: %v",
-					rf.me, i, !ok, rf.mRole != CANDIDATE, rf.currentTerm != args.Term)
-				return
-			}
-
-			if rf.currentTerm < reply.Term {
-				rf.currentTerm = reply.Term
-				rf.changeRole(FOLLOWER)
-				return
-			}
-
-			if reply.VoteGranted {
-				atomic.AddInt32(&voteNum, 1)
-				//如果获得票数超过一半了，就当选leader
-				DPrintf("%d granted vote from %d", rf.me, i)
-				if atomic.LoadInt32(&voteNum) > (int32)(len(rf.peers)/2) {
-					rf.changeRole(LEADER)
-				}
-			}
-
-		}(index)
-	}
-}
-
-//给每个peer发送添加entry的RPC
-func (rf *Raft) callAppendEntries() {
-	_, _ = DPrintf("start callAppendEntries, raft: %+v", rf.me)
-	for index := range rf.peers {
-		if index == rf.me {
-			continue
-		}
-		go func(server int) {
-			for {
-				rf.mu.Lock()
-				if rf.mRole != LEADER {
-					rf.mu.Unlock()
-					return
-				}
-
-				prevLogIndex := rf.nextIndex[server] - 1
-
-				if prevLogIndex < rf.LastIncludedIndex {
-					rf.mu.Unlock()
-					rf.callInstallSnapshot(server)
-					return
-				}
-
-				args := AppendEntriesArgs{
-					Term:         rf.currentTerm,
-					LeaderID:     rf.me,
-					PrevLogIndex: prevLogIndex,
-					PrevLogTerm:  rf.logEntries[rf.getRelativeIndex(prevLogIndex)].Term,
-					LeaderCommit: rf.commitIndex,
-					Entries:      append(make([]Entry, 0), rf.logEntries[rf.getRelativeIndex(rf.nextIndex[server]):]...),
-				}
-
-				DPrintf("%v send AppendEntries RPC to %v, nextIndex = %v, prevLogIndex = %d, commitIndex = %d， log len: %d", rf.me, server, rf.nextIndex, prevLogIndex, rf.commitIndex, len(args.Entries))
-				rf.mu.Unlock()
-
-				reply := AppendEntriesReply{}
-				ok := rf.sendAppendEntries(server, &args, &reply)
-				// 这里为什么又可以加锁呢，因为这是在go func里面，外面的锁不会进入到go func里面来，
-				// 又因为上面的RPC肯定比本地函数退栈更耗时间，所以这里再锁的时候前面changeRole函数外面的锁早就已经解开了
-				rf.mu.Lock()
-
-				//students-guide-to-raft, Term confusion, what you should do when you get old RPC replies.
-				//compare the current term with the term you sent in your original RPC.
-				//If the two are different, drop the reply and return.
-				if !ok || rf.mRole != LEADER || rf.currentTerm != args.Term {
-					_, _ = DPrintf("%d AppendEntries early return %d, !ok: %v, mRole: %v, condition3: %v",
-						rf.me, server, !ok, rf.mRole != LEADER, rf.currentTerm != args.Term)
-					rf.mu.Unlock()
-					return
-				}
-
-				if reply.Term > rf.currentTerm {
-					_, _ = DPrintf("id: %d, voteFor: %v, role: %v, term: %v: %d's term is large than me, and i will change term form %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, server, rf.currentTerm, reply.Term)
-					rf.currentTerm = reply.Term
-					rf.changeRole(FOLLOWER)
-					rf.mu.Unlock()
-					return
-				}
-
-				_, _ = DPrintf("%d AppendEntries Reply from peer: %v, reply: %+v", rf.me, server, reply)
-				if !reply.Success {
-					// 如果append失败的话就往前减少nextIndex继续append
-					// based on students-guide-to-raft accelerated log backtracking optimization
-					rf.nextIndex[server] = reply.ConflictIndex
-					if reply.ConflictTerm != -1 {
-						_, _ = DPrintf("%d peer: %v not match, nextIndex: %v", rf.me, server, rf.nextIndex[server])
-						for i := args.PrevLogIndex; i >= rf.LastIncludedIndex+1; i-- {
-							if rf.logEntries[rf.getRelativeIndex(i-1)].Term == reply.ConflictTerm {
-								rf.nextIndex[server] = i
-								break
-							}
-						}
-					}
-					rf.mu.Unlock()
-				} else {
-					//base on students-guide-to-raft
-					rf.matchIndex[server] = args.PrevLogIndex + len(args.Entries)
-					rf.nextIndex[server] = rf.matchIndex[server] + 1
-					rf.matchIndex[rf.me] = rf.getAbsoluteIndex(len(rf.logEntries) - 1)
-					_, _ = DPrintf("leader: %d, i: %d, apply msg, matchIndex: %+v, nextIndex: %+v, lastApply: %d, commitIndex: %d",
-						rf.me, server, rf.matchIndex, rf.nextIndex, rf.lastApplied, rf.commitIndex)
-					for i := rf.getAbsoluteIndex(len(rf.logEntries) - 1); i > rf.commitIndex; i-- {
-						matched := 0
-						for _, matchIndex := range rf.matchIndex {
-							if matchIndex >= i {
-								matched++
-								// log复制到了一半以上的peer
-								if matched > len(rf.peers)/2 &&
-									rf.logEntries[rf.getRelativeIndex(i)].Term == rf.currentTerm {
-									rf.commitIndex = i
-									rf.applyMsg()
-									break
-								}
-							}
-						}
-					}
-					rf.mu.Unlock()
-					return
-				}
-			}
-		}(index)
-	}
-}
-
-func (rf *Raft) callInstallSnapshot(server int) {
-	rf.mu.Lock()
-	DPrintf("%v send InstallSnapshot RPC to %v", rf.me, server)
-	arg := InstallSnapshotArgs{
-		Term:              rf.currentTerm,
-		LeaderId:          rf.me,
-		LastIncludedIndex: rf.LastIncludedIndex,
-		LastIncludedTerm:  rf.LastIncludedTerm,
-		Snapshot:          rf.persister.ReadSnapshot(),
-	}
-	rf.mu.Unlock()
-	reply := InstallSnapshotReply{}
-	ok := rf.sendInstallSnapshot(server, &arg, &reply)
-	if !ok {
-		DPrintf("%v callInstallSnapshot error %d", rf.me, server)
-		return
-	}
-	DPrintf("callInstallSnapshot success, %d to %d", rf.me, server)
-
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	if rf.mRole != LEADER {
-		return
-	}
-
-	if reply.Term > rf.currentTerm {
-		DPrintf("callInstallSnapshot, id: %d, voteFor: %v, role: %v, term: %v: someone's term is large than me, and i will change term form %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm, reply.Term)
-		rf.currentTerm = reply.Term
-		rf.changeRole(FOLLOWER)
-		return
-	}
-
-	rf.matchIndex[server] = arg.LastIncludedIndex
-	rf.nextIndex[server] = rf.matchIndex[server] + 1
-}
-
 func (rf *Raft) applyMsg() {
 	// apply to state machine
 	// 因为这里使用的是go func，所以改变lastApplied的时候需要重新加锁
-	//go func() {
-	//	rf.mu.Lock()
-	if rf.LastIncludedIndex > rf.lastApplied {
-		rf.lastApplied = rf.LastIncludedIndex
-	}
-
-	if rf.LastIncludedIndex > rf.commitIndex {
-		rf.commitIndex = rf.LastIncludedIndex
-	}
-
-	if rf.commitIndex > rf.lastApplied {
-		startIndex := rf.lastApplied + 1
-		endIndex := rf.commitIndex + 1
-		logs := rf.logEntries[rf.getRelativeIndex(startIndex):rf.getRelativeIndex(endIndex)]
-		for index, log := range logs {
-			applyArgs := ApplyMsg{
-				Command:      log.Commend,
-				CommandValid: true,
-				CommandIndex: startIndex + index,
-			}
-
-			rf.applyCh <- applyArgs
-			rf.lastApplied++
-			DPrintf("id: %d, voteFor: %v, role: %v, term: %v, lastApplied: %v, commitIndex: %v: Apply Msg %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.lastApplied, rf.commitIndex, applyArgs)
+	go func() {
+		rf.mu.Lock()
+		if rf.LastIncludedIndex > rf.lastApplied {
+			rf.lastApplied = rf.LastIncludedIndex
 		}
-	}
-	//rf.mu.Unlock()
-	//}()
+
+		if rf.LastIncludedIndex > rf.commitIndex {
+			rf.commitIndex = rf.LastIncludedIndex
+		}
+
+		if rf.commitIndex > rf.lastApplied {
+			startIndex := rf.lastApplied + 1
+			endIndex := rf.commitIndex + 1
+			logs := rf.logEntries[rf.getRelativeIndex(startIndex):rf.getRelativeIndex(endIndex)]
+			for index, log := range logs {
+				applyArgs := ApplyMsg{
+					Command:      log.Commend,
+					CommandValid: true,
+					CommandIndex: startIndex + index,
+				}
+
+				rf.applyCh <- applyArgs
+				rf.lastApplied++
+				DPrintf("id: %d, voteFor: %v, role: %v, term: %v, lastApplied: %v, commitIndex: %v: Apply Msg %+v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.lastApplied, rf.commitIndex, applyArgs)
+			}
+		}
+		rf.mu.Unlock()
+	}()
 }
 
 //

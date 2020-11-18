@@ -68,3 +68,39 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.applyCh <- msg
 	}(msg)
 }
+
+func (rf *Raft) callInstallSnapshot(server int) {
+	rf.mu.Lock()
+	DPrintf("%v send InstallSnapshot RPC to %v", rf.me, server)
+	arg := InstallSnapshotArgs{
+		Term:              rf.currentTerm,
+		LeaderId:          rf.me,
+		LastIncludedIndex: rf.LastIncludedIndex,
+		LastIncludedTerm:  rf.LastIncludedTerm,
+		Snapshot:          rf.persister.ReadSnapshot(),
+	}
+	rf.mu.Unlock()
+	reply := InstallSnapshotReply{}
+	ok := rf.sendInstallSnapshot(server, &arg, &reply)
+	if !ok {
+		DPrintf("%v callInstallSnapshot error %d", rf.me, server)
+		return
+	}
+	DPrintf("callInstallSnapshot success, %d to %d", rf.me, server)
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.mRole != LEADER {
+		return
+	}
+
+	if reply.Term > rf.currentTerm {
+		DPrintf("callInstallSnapshot, id: %d, voteFor: %v, role: %v, term: %v: someone's term is large than me, and i will change term form %v to %v", rf.me, rf.votedFor, rf.mRole, rf.currentTerm, rf.currentTerm, reply.Term)
+		rf.currentTerm = reply.Term
+		rf.changeRole(FOLLOWER)
+		return
+	}
+
+	rf.matchIndex[server] = arg.LastIncludedIndex
+	rf.nextIndex[server] = rf.matchIndex[server] + 1
+}

@@ -1,5 +1,7 @@
 package raft
 
+import "sync/atomic"
+
 //
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
@@ -61,5 +63,64 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
+	}
+}
+
+func (rf *Raft) startElection() {
+	rf.mu.Lock()
+	rf.electionTime.Reset(randomizedElectionTimeouts())
+	if rf.mRole == LEADER {
+		return
+	}
+
+	rf.changeRole(CANDIDATE)
+
+	lastLogIndex := len(rf.logEntries) - 1
+
+	args := RequestVoteArgs{
+		Term:         rf.currentTerm,
+		CandidateId:  rf.me,
+		LastLogIndex: rf.getAbsoluteIndex(lastLogIndex),
+		LastLogTerm:  rf.logEntries[lastLogIndex].Term,
+	}
+	rf.mu.Unlock()
+
+	var voteNum int32
+	voteNum = 1
+	for index := range rf.peers {
+		if index == rf.me {
+			continue
+		}
+		go func(i int) {
+			var reply RequestVoteReply
+			ok := rf.sendRequestVote(i, &args, &reply)
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+
+			//students-guide-to-raft, Term confusion, what you should do when you get old RPC replies.
+			//compare the current term with the term you sent in your original RPC.
+			//If the two are different, drop the reply and return.
+			if !ok || rf.mRole != CANDIDATE || rf.currentTerm != args.Term {
+				_, _ = DPrintf("%d RequestVote early return %d, !ok: %v, mRole: %v, condition3: %v",
+					rf.me, i, !ok, rf.mRole != CANDIDATE, rf.currentTerm != args.Term)
+				return
+			}
+
+			if rf.currentTerm < reply.Term {
+				rf.currentTerm = reply.Term
+				rf.changeRole(FOLLOWER)
+				return
+			}
+
+			if reply.VoteGranted {
+				atomic.AddInt32(&voteNum, 1)
+				//如果获得票数超过一半了，就当选leader
+				DPrintf("%d granted vote from %d", rf.me, i)
+				if atomic.LoadInt32(&voteNum) > (int32)(len(rf.peers)/2) {
+					rf.changeRole(LEADER)
+				}
+			}
+
+		}(index)
 	}
 }
