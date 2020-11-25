@@ -31,6 +31,7 @@ type KVServer struct {
 	dead    int32 // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
+	threshold    int
 
 	// Your definitions here.
 
@@ -110,15 +111,6 @@ func (kv *KVServer) waitOp(op Op) bool {
 			return false
 		}
 	case <-time.After(Timeout):
-		//kv.mu.Lock()
-		//defer kv.mu.Unlock()
-		//maxIndex, ok := kv.clientLastSeq[op.ClientId]
-		//if ok && op.SerialNum <= maxIndex {
-		//	_, _ = DPrintf("waitting agreeCh timeout, kvserver: %d, result: %v", kv.me, false)
-		//	return false
-		//}
-		//_, _ = DPrintf("waitting agreeCh timeout, kvserver: %d, result: %v", kv.me, true)
-		//return true
 		return false
 	}
 	return true
@@ -133,8 +125,8 @@ func (kv *KVServer) waitApply() {
 			if msg.CommandValid {
 				op := msg.Command.(Op)
 				kv.mu.Lock()
-				maxIndex, ok := kv.clientLastSeq[op.ClientId]
-				if !ok || op.SerialNum > maxIndex {
+				lastSeq, ok := kv.clientLastSeq[op.ClientId]
+				if !ok || op.SerialNum > lastSeq {
 					kv.clientLastSeq[op.ClientId] = op.SerialNum
 					switch op.Type {
 					case PutOp:
@@ -144,10 +136,10 @@ func (kv *KVServer) waitApply() {
 					case GetOp:
 
 					default:
-						_, _ = DPrintf("ERROR OP type")
+						panic("ERROR OP type")
 					}
+					go kv.doSnapshot(msg.CommandIndex)
 				}
-				go kv.doSnapshot(msg.CommandIndex)
 				agreeCh, ok := kv.agreeChs[msg.CommandIndex]
 				if ok {
 					agreeCh <- op
@@ -168,7 +160,7 @@ func (kv *KVServer) doSnapshot(lastApplyIndex int) {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	kv.mu.Lock()
-	if kv.maxraftstate < 0 || kv.persister.RaftStateSize() < kv.maxraftstate {
+	if kv.maxraftstate < 0 || kv.persister.RaftStateSize() < kv.threshold {
 		kv.mu.Unlock()
 		return
 	}
@@ -247,6 +239,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
+	kv.threshold = int(float32(maxraftstate) * float32(0.8))
 	kv.persister = persister
 	DPrintf("maxraftstate: %d", maxraftstate)
 
