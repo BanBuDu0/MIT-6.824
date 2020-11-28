@@ -1,6 +1,9 @@
 package raft
 
-import "math"
+import (
+	"math"
+	"time"
+)
 
 type AppendEntriesArgs struct {
 	Term         int
@@ -28,6 +31,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.ConflictIndex = -1
 	reply.ConflictTerm = -1
+	rf.lastAppendTime = time.Now()
 
 	// 1. Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {

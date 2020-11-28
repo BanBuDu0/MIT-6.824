@@ -1,6 +1,10 @@
 package raft
 
-import "sync/atomic"
+import (
+	//"fmt"
+	"sync/atomic"
+	"time"
+)
 
 //
 // example RequestVote RPC arguments structure.
@@ -31,6 +35,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	//fmt.Printf("me: %d, now: %v, lasttime: %v, add: %v", rf.me, time.Now(), rf.lastAppendTime, rf.lastAppendTime.Add(ElectionTimeout))
+
+	if time.Now().Before(rf.lastAppendTime.Add(ElectionTimeout)) {
+		reply.VoteGranted = false
+		reply.Term = rf.currentTerm
+		//fmt.Printf("I believe a current leader exists!\n")
+		return
+	}
+
 	if args.Term < rf.currentTerm {
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm

@@ -99,6 +99,9 @@ type Raft struct {
 	LastIncludedIndex int
 	//the term of last entry
 	LastIncludedTerm int
+
+	//additional
+	lastAppendTime time.Time
 }
 
 // return currentTerm and whether this server
