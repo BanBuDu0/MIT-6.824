@@ -157,13 +157,13 @@ func (kv *KVServer) waitApply() {
 }
 
 func (kv *KVServer) doSnapshot(lastApplyIndex int) {
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
 	kv.mu.Lock()
 	if kv.maxraftstate < 0 || kv.persister.RaftStateSize() < kv.threshold {
 		kv.mu.Unlock()
 		return
 	}
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
 	_, _ = DPrintf("server: %d, start do snapshot, maxraftstate: %d, kv.RaftStateSize: %d, kv.snapshotsize: %d",
 		kv.me, kv.maxraftstate, kv.persister.RaftStateSize(), kv.persister.SnapshotSize())
 	err1 := e.Encode(kv.db)

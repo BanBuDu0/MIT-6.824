@@ -1,6 +1,9 @@
 package shardmaster
 
-import "../raft"
+import (
+	"../raft"
+	"time"
+)
 import "../labrpc"
 import "sync"
 import "../labgob"
@@ -13,27 +16,113 @@ type ShardMaster struct {
 
 	// Your data here.
 
-	configs []Config // indexed by config num
+	configs       []Config // indexed by config num
+	stopCh        chan struct{}
+	clientLastSeq map[int64]int32 //记录每个client的最后一个sequence num
+	agreeChs      map[int]chan Op
 }
 
 type Op struct {
 	// Your data here.
+	Type      string
+	ClientId  int64
+	SerialNum int32
+	Args      interface{}
+}
+
+func (sm *ShardMaster) waitOp(op Op) bool {
+	index, _, isLeader := sm.rf.Start(op)
+	if !isLeader {
+		return false
+	}
+
+	sm.mu.Lock()
+	agreeCh, ok := sm.agreeChs[index]
+	if !ok {
+		agreeCh = make(chan Op, 1)
+		sm.agreeChs[index] = agreeCh
+	}
+	sm.mu.Unlock()
+
+	select {
+	case agreeOp := <-agreeCh:
+		if !(op.ClientId == agreeOp.ClientId && op.SerialNum == agreeOp.SerialNum) {
+			return false
+		}
+	case <-time.After(Timeout):
+		return false
+
+	}
+	return true
+
 }
 
 func (sm *ShardMaster) Join(args *JoinArgs, reply *JoinReply) {
 	// Your code here.
+	op := Op{
+		Type:      JoinOp,
+		ClientId:  args.ClientId,
+		SerialNum: args.SerialNum,
+		Args:      args,
+	}
+	isLeader := sm.waitOp(op)
+	if !isLeader {
+		reply.WrongLeader = true
+		reply.Err = ErrWrongLeader
+	}
 }
 
 func (sm *ShardMaster) Leave(args *LeaveArgs, reply *LeaveReply) {
 	// Your code here.
+	op := Op{
+		Type:      LeaveOp,
+		ClientId:  args.ClientId,
+		SerialNum: args.SerialNum,
+		Args:      args,
+	}
+	isLeader := sm.waitOp(op)
+	if !isLeader {
+		reply.WrongLeader = true
+		reply.Err = ErrWrongLeader
+	}
 }
 
 func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
 	// Your code here.
+	op := Op{
+		Type:      MoveOp,
+		ClientId:  args.ClientId,
+		SerialNum: args.SerialNum,
+		Args:      args,
+	}
+	isLeader := sm.waitOp(op)
+	if !isLeader {
+		reply.WrongLeader = true
+		reply.Err = ErrWrongLeader
+	}
 }
 
 func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	// Your code here.
+	op := Op{
+		Type:      LeaveOp,
+		ClientId:  args.ClientId,
+		SerialNum: args.SerialNum,
+		Args:      args,
+	}
+	isLeader := sm.waitOp(op)
+	if !isLeader {
+		reply.WrongLeader = true
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	sm.mu.Lock()
+	if args.Num < 0 || args.Num > len(sm.configs) {
+		reply.Config = sm.configs[len(sm.configs)-1]
+	} else {
+		reply.Config = sm.configs[args.Num]
+	}
 }
 
 //
@@ -45,6 +134,7 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 func (sm *ShardMaster) Kill() {
 	sm.rf.Kill()
 	// Your code here, if desired.
+	close(sm.stopCh)
 }
 
 // needed by shardkv tester
@@ -70,6 +160,65 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sm.rf = raft.Make(servers, me, persister, sm.applyCh)
 
 	// Your code here.
+	sm.clientLastSeq = make(map[int64]int32)
+	sm.agreeChs = make(map[int]chan Op)
+	sm.stopCh = make(chan struct{})
 
+	go sm.waitApply()
 	return sm
+}
+
+func (sm *ShardMaster) waitApply() {
+	for {
+		select {
+		case <-sm.stopCh:
+			return
+		case msg := <-sm.applyCh:
+			if msg.CommandValid {
+				op := msg.Command.(Op)
+				//先检测op是不是旧的
+				sm.mu.Lock()
+				lastSeq, ok := sm.clientLastSeq[op.ClientId]
+				if !ok || op.SerialNum > lastSeq {
+					sm.clientLastSeq[op.ClientId] = op.SerialNum
+					switch op.Type {
+					case JoinOp:
+						sm.doJoin(op.Args.(JoinArgs))
+					case LeaveOp:
+					case MoveOp:
+					case QueryOp:
+					default:
+						panic("ERROR OP type")
+					}
+				}
+				agreeCh, ok := sm.agreeChs[msg.CommandIndex]
+				if ok {
+					agreeCh <- op
+				}
+				sm.mu.Unlock()
+			}
+		}
+	}
+}
+
+func (sm *ShardMaster) doJoin(args JoinArgs) {
+	conf := Config{
+		Num:    0,
+		Shards: [10]int{},
+		Groups: nil,
+	}
+
+	sm.configs = append(sm.configs, conf)
+}
+
+func (sm *ShardMaster) getCopyOfLastConf() {
+	len1 := len(sm.configs)
+	conf := Config{
+		Num:    sm.configs[len1].Num,
+		Shards: sm.configs[len1].Shards,
+		Groups: make(map[int][]string),
+	}
+	for key, val := range sm.configs[len1].Groups {
+		conf.Groups[key] = append([]string{}, val...)
+	}
 }

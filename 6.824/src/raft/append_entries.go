@@ -58,6 +58,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	// 2. Reply false if log does not contain an entry at prevLogIndex whose term matches prevLogTerm
+	// 2. 如果在prevLogIndex这个位置没有term和prevLogTerm相匹配(一致)的log, 就返回false
+	// 这里相匹配又分为两种情况，1.是 在log里面找不到prevLogIndex 2.是 log里面有prevLogIndex，但是Term不匹配
+	// 2这个操作	在原文又称为一致性检测(consistency check)，用来保证Log Matching Property
 	// If you get an AppendEntries RPC with a prevLogIndex that points beyond the end of your log,
 	// you should handle it the same as if you did have that entry but the term did not match
 	// mismatch
@@ -205,7 +208,7 @@ func (rf *Raft) callAppendEntries() {
 					//base on students-guide-to-raft
 					rf.matchIndex[server] = args.PrevLogIndex + len(args.Entries)
 					rf.nextIndex[server] = rf.matchIndex[server] + 1
-					rf.matchIndex[rf.me] = rf.getAbsoluteIndex(len(rf.logEntries) - 1)
+					//rf.matchIndex[rf.me] = rf.getAbsoluteIndex(len(rf.logEntries) - 1)
 					_, _ = DPrintf("leader: %d, i: %d, apply msg, matchIndex: %+v, nextIndex: %+v, lastApply: %d, commitIndex: %d",
 						rf.me, server, rf.matchIndex, rf.nextIndex, rf.lastApplied, rf.commitIndex)
 					for i := rf.getAbsoluteIndex(len(rf.logEntries) - 1); i > rf.commitIndex; i-- {

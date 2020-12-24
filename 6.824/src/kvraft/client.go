@@ -46,19 +46,20 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 	serverId := ck.leader
 	curSerialNum := atomic.AddInt32(&ck.serialNum, 1)
+	args := &GetArgs{
+		Key:       key,
+		ClientId:  ck.clientId,
+		SerialNum: curSerialNum,
+	}
 	for {
 		server := ck.servers[serverId]
-		args := &GetArgs{
-			Key:       key,
-			ClientId:  ck.clientId,
-			SerialNum: curSerialNum,
-		}
 		reply := &GetReply{}
 		ok := server.Call("KVServer.Get", args, reply)
 		if ok == false || reply.Err == ErrWrongLeader {
 			serverId = int(nrand()) % len(ck.servers)
 			continue
 		}
+		ck.leader = serverId
 		return reply.Value
 	}
 }
@@ -77,21 +78,22 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
 	serverId := ck.leader
 	curSerialNum := atomic.AddInt32(&ck.serialNum, 1)
+	args := &PutAppendArgs{
+		Key:       key,
+		Value:     value,
+		Op:        op,
+		ClientId:  ck.clientId,
+		SerialNum: curSerialNum,
+	}
 	for {
 		server := ck.servers[serverId]
-		args := &PutAppendArgs{
-			Key:       key,
-			Value:     value,
-			Op:        op,
-			ClientId:  ck.clientId,
-			SerialNum: curSerialNum,
-		}
 		reply := &PutAppendReply{}
 		ok := server.Call("KVServer.PutAppend", args, reply)
 		if ok == false || reply.Err == ErrWrongLeader {
 			serverId = int(nrand()) % len(ck.servers)
 			continue
 		}
+		ck.leader = serverId
 		return
 	}
 
