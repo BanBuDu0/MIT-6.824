@@ -24,7 +24,17 @@ const NShards = 10
 
 // A configuration -- an assignment of shards to groups.
 // Please don't change this.
-// 一共有10个分片，每个分片对应一个string类型的server数组
+/**
+一共有10个分片，每个分片对应一个string类型的server数组
+如果有3个raft group
+Shards = [0,0,0,0,1,1,1,2,2,2]
+Groups = {
+	0: [s1, s2, s3]
+	1: [s4, s5, s6]
+	2: [s7, s8, s9]
+}
+Join需要做的就是在Groups中加入，例如3: [s10, s11, s12]，然后在Shards里面做均衡，例如重新分配Shards = [0,0,0,1,1,1,2,2,3,3]
+*/
 type Config struct {
 	Num    int              // config number
 	Shards [NShards]int     // shard -> gid

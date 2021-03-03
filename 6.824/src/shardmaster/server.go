@@ -51,7 +51,6 @@ func (sm *ShardMaster) waitOp(op Op) bool {
 		}
 	case <-time.After(Timeout):
 		return false
-
 	}
 	return true
 
@@ -63,7 +62,7 @@ func (sm *ShardMaster) Join(args *JoinArgs, reply *JoinReply) {
 		Type:      JoinOp,
 		ClientId:  args.ClientId,
 		SerialNum: args.SerialNum,
-		Args:      args,
+		Args:      *args,
 	}
 	isLeader := sm.waitOp(op)
 	if !isLeader {
@@ -78,7 +77,7 @@ func (sm *ShardMaster) Leave(args *LeaveArgs, reply *LeaveReply) {
 		Type:      LeaveOp,
 		ClientId:  args.ClientId,
 		SerialNum: args.SerialNum,
-		Args:      args,
+		Args:      *args,
 	}
 	isLeader := sm.waitOp(op)
 	if !isLeader {
@@ -93,7 +92,7 @@ func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
 		Type:      MoveOp,
 		ClientId:  args.ClientId,
 		SerialNum: args.SerialNum,
-		Args:      args,
+		Args:      *args,
 	}
 	isLeader := sm.waitOp(op)
 	if !isLeader {
@@ -102,13 +101,14 @@ func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
 	}
 }
 
+//Query OK
 func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	// Your code here.
 	op := Op{
-		Type:      LeaveOp,
+		Type:      QueryOp,
 		ClientId:  args.ClientId,
 		SerialNum: args.SerialNum,
-		Args:      args,
+		Args:      *args,
 	}
 	isLeader := sm.waitOp(op)
 	if !isLeader {
@@ -118,10 +118,13 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	}
 
 	sm.mu.Lock()
-	if args.Num < 0 || args.Num > len(sm.configs) {
-		reply.Config = sm.configs[len(sm.configs)-1]
+	defer sm.mu.Unlock()
+	if args.Num == -1 || args.Num >= len(sm.configs) {
+		//If the number is -1 or bigger than the biggest known configuration number,
+		//the shardctrler should reply with the latest configuration.
+		reply.Config = sm.getCopyOfConf(len(sm.configs) - 1)
 	} else {
-		reply.Config = sm.configs[args.Num]
+		reply.Config = sm.getCopyOfConf(args.Num)
 	}
 }
 
@@ -156,6 +159,11 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	sm.configs[0].Groups = map[int][]string{}
 
 	labgob.Register(Op{})
+	labgob.Register(JoinArgs{})
+	labgob.Register(LeaveArgs{})
+	labgob.Register(MoveArgs{})
+	labgob.Register(QueryArgs{})
+
 	sm.applyCh = make(chan raft.ApplyMsg)
 	sm.rf = raft.Make(servers, me, persister, sm.applyCh)
 
@@ -185,7 +193,9 @@ func (sm *ShardMaster) waitApply() {
 					case JoinOp:
 						sm.doJoin(op.Args.(JoinArgs))
 					case LeaveOp:
+						sm.doLeave(op.Args.(LeaveArgs))
 					case MoveOp:
+						sm.doMove(op.Args.(MoveArgs))
 					case QueryOp:
 					default:
 						panic("ERROR OP type")
@@ -202,23 +212,75 @@ func (sm *ShardMaster) waitApply() {
 }
 
 func (sm *ShardMaster) doJoin(args JoinArgs) {
-	conf := Config{
-		Num:    0,
-		Shards: [10]int{},
-		Groups: nil,
+	conf := sm.getCopyOfConf(len(sm.configs) - 1)
+	conf.Num++
+	for gid, servers := range args.Servers {
+		temp := make([]string, len(servers))
+		copy(temp, servers)
+		conf.Groups[gid] = temp
 	}
-
+	sm.reShard(&conf)
 	sm.configs = append(sm.configs, conf)
 }
 
-func (sm *ShardMaster) getCopyOfLastConf() {
-	len1 := len(sm.configs)
+func (sm *ShardMaster) doLeave(args LeaveArgs) {
+	conf := sm.getCopyOfConf(len(sm.configs) - 1)
+	conf.Num++
+	for _, gid := range args.GIDs {
+		delete(conf.Groups, gid)
+	}
+	sm.reShard(&conf)
+	sm.configs = append(sm.configs, conf)
+}
+
+func (sm *ShardMaster) doMove(args MoveArgs) {
+	conf := sm.getCopyOfConf(len(sm.configs) - 1)
+	conf.Num++
+	if conf.Shards[args.Shard] != args.GID {
+		conf.Shards[args.Shard] = args.GID
+	}
+	sm.configs = append(sm.configs, conf)
+}
+
+/**
+reShard的作用是，在Join和Leave之后，重新对Shards进行分配
+*/
+func (sm *ShardMaster) reShard(conf *Config) {
+	//totalGroup := len(conf.Groups)
+	totalServer := 0
+	for _, servers := range conf.Groups {
+		totalServer += len(servers)
+	}
+
+	right := 0
+	for gid, servers := range conf.Groups {
+		serverNum := len(servers)
+		temp := NShards * serverNum / totalServer
+		if temp == 0 {
+			temp = 1
+		}
+		for i := 0; i < temp; i++ {
+			if right >= NShards {
+				break
+			}
+			conf.Shards[right] = gid
+			right++
+		}
+	}
+}
+
+func (sm *ShardMaster) getCopyOfConf(index int) Config {
+	var temp [NShards]int
+	for i := 0; i < NShards; i++ {
+		temp[i] = sm.configs[index].Shards[i]
+	}
 	conf := Config{
-		Num:    sm.configs[len1].Num,
-		Shards: sm.configs[len1].Shards,
+		Num:    sm.configs[index].Num,
+		Shards: temp,
 		Groups: make(map[int][]string),
 	}
-	for key, val := range sm.configs[len1].Groups {
+	for key, val := range sm.configs[index].Groups {
 		conf.Groups[key] = append([]string{}, val...)
 	}
+	return conf
 }
